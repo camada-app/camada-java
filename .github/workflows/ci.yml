@@ -1,0 +1,24 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java: ["17", "21", "25"]
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: camada-java }
+      # The golden snapshot fixtures the suite is pinned to, and the beacon build the package vendors.
+      - uses: actions/checkout@v4
+        with: { repository: ${{ github.repository_owner }}/camada-core, path: camada-core }
+      - uses: actions/checkout@v4
+        with: { repository: ${{ github.repository_owner }}/camada-browser, path: camada-browser }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x }
+      - run: npm install && npm run build
+        working-directory: camada-browser
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "${{ matrix.java }}", cache: maven }
+      - run: mvn -q verify
+        working-directory: camada-java
