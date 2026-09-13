@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,7 +17,9 @@ import dev.camada.Hosts.Call;
 import dev.camada.Hosts.Reply;
 import dev.camada.Hosts.ServletDriver;
 import dev.camada.Options;
+import dev.camada.Passed;
 import dev.camada.Req;
+import dev.camada.Result;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -89,7 +92,6 @@ class FilterTest {
     assertEquals("a=1; _sfp=abc", req.header("cookie"));
     assertEquals("text/html, */*", req.header("accept"));
     assertNull(req.header("x-none"));
-    assertNull(req.route());
     for (Map.Entry<String, String> h : req.headers()) {
       assertEquals(h.getKey().toLowerCase(), h.getKey()); // names lower-cased, order kept
     }
@@ -226,16 +228,15 @@ class FilterTest {
     assertEquals(1, events().size());
   }
 
-  @Test
-  void onFinishFiresExactlyOnceWhenTheAppThrows() throws Exception {
-    AtomicInteger finishes = new AtomicInteger();
+  /** An engine whose Passed counts the onFinish calls it gets. */
+  Camada counting(AtomicInteger finishes) {
     Camada counting =
         new Camada(new Options().env(Hosts.ENV).transport(analyst)) {
           @Override
-          public dev.camada.Result handle(Req req, byte[] body) {
-            dev.camada.Result r = super.handle(req, body);
-            if (r instanceof dev.camada.Passed p && p.onFinish() != null) {
-              return new dev.camada.Passed(
+          public Result handle(Req req, byte[] body) {
+            Result r = super.handle(req, body);
+            if (r instanceof Passed p && p.onFinish() != null) {
+              return new Passed(
                   p.rid(),
                   p.setCookie(),
                   p.ctx(),
@@ -247,8 +248,15 @@ class FilterTest {
             return r;
           }
         };
+    Hosts.loaded(counting);
+    return counting;
+  }
+
+  @Test
+  void onFinishFiresExactlyOnceWhenTheAppThrows() throws Exception {
+    AtomicInteger finishes = new AtomicInteger();
+    Camada counting = counting(finishes);
     try {
-      Hosts.loaded(counting);
       ServletDriver d =
           new ServletDriver(
               counting,
@@ -269,6 +277,59 @@ class FilterTest {
       for (Map<String, Object> e : analyst.allEvents()) {
         assertEquals(500L, ((Number) e.get("st")).longValue());
       }
+    } finally {
+      counting.stop();
+    }
+  }
+
+  @Test
+  void sendErrorThenAnExceptionStillFiresOnceWith500() throws Exception {
+    AtomicInteger finishes = new AtomicInteger();
+    Camada counting = counting(finishes);
+    try {
+      CamadaFilter filter = new CamadaFilter(counting);
+      MockHttpServletRequest req = ServletDriver.request(new Call("GET", "/half"));
+      MockHttpServletResponse res = new MockHttpServletResponse();
+      FilterChain chain =
+          (rq, rs) -> {
+            ((HttpServletResponse) rs).sendError(404, "nope");
+            throw new IllegalStateException("after sendError");
+          };
+      assertThrows(IllegalStateException.class, () -> filter.doFilter(req, res, chain));
+      assertEquals(1, finishes.get());
+      counting.queue().flush();
+      List<Map<String, Object>> evs = analyst.allEvents();
+      assertEquals(1, evs.size());
+      assertEquals(500L, ((Number) evs.get(0).get("st")).longValue()); // the app threw: 500
+    } finally {
+      counting.stop();
+    }
+  }
+
+  @Test
+  void anAsyncStartThenAnExceptionFiresOnceAndCompletionShipsNothingMore() throws Exception {
+    AtomicInteger finishes = new AtomicInteger();
+    Camada counting = counting(finishes);
+    try {
+      CamadaFilter filter = new CamadaFilter(counting);
+      MockHttpServletRequest req = ServletDriver.request(new Call("GET", "/async-boom"));
+      req.setAsyncSupported(true);
+      MockHttpServletResponse res = new MockHttpServletResponse();
+      MockAsyncContext[] ctx = new MockAsyncContext[1];
+      FilterChain chain =
+          (rq, rs) -> {
+            ctx[0] = (MockAsyncContext) rq.startAsync(rq, rs);
+            throw new IllegalStateException("after startAsync");
+          };
+      assertThrows(IllegalStateException.class, () -> filter.doFilter(req, res, chain));
+      assertEquals(1, finishes.get());
+      res.setStatus(202);
+      ctx[0].complete(); // the listener was never registered: nothing more ships
+      assertEquals(1, finishes.get());
+      counting.queue().flush();
+      List<Map<String, Object>> evs = analyst.allEvents();
+      assertEquals(1, evs.size());
+      assertEquals(500L, ((Number) evs.get(0).get("st")).longValue());
     } finally {
       counting.stop();
     }
@@ -319,12 +380,41 @@ class FilterTest {
     assertEquals("signup", tracked.get("et"));
     assertEquals(r.header("x-rid"), tracked.get("rid"));
     assertNotNull(tracked.get("uid"));
-    // without the filter: silent no-ops through the default engine
+    // without the filter and without a default engine: silent no-ops, and no engine gets built
     MockHttpServletRequest bare = new MockHttpServletRequest();
-    Camada.configure(new Options().env(Map.of()));
+    Camada.resetDefault();
     assertEquals("", Camada.scriptTag(bare));
     Camada.track(bare, "signup", null);
     assertFalse(Camada.serveChallenge(bare, new MockHttpServletResponse()));
+    assertNull(Camada.engineFor(null));
+    // with one: they resolve through it
+    Camada inert = Camada.configure(new Options().env(Map.of()));
+    assertSame(inert, Camada.engineFor(null));
+    assertEquals("", Camada.scriptTag(bare));
+  }
+
+  @Test
+  void aHelperCallBeforeTheFirstRequestDoesNotPreEmptTheFiltersOptions() throws Exception {
+    // The trap: a handler outside the filter's mapping calls Camada.track() first. Were the
+    // helpers to build the default from System.getenv(), a filter handed Options would be bound
+    // to that inert engine for the JVM's life.
+    Camada.resetDefault();
+    CamadaFilter filter = new CamadaFilter(new Options().env(Hosts.ENV).transport(analyst));
+    MockHttpServletRequest bare = new MockHttpServletRequest();
+    Camada.track(bare, "login_failed", "bob");
+    assertEquals("", Camada.scriptTag(bare));
+    assertNull(Camada.engineFor(null));
+    MockHttpServletRequest req = ServletDriver.request(new Call("GET", "/"));
+    MockHttpServletResponse res = new MockHttpServletResponse();
+    filter.doFilter(req, res, (rq, rs) -> rs.getOutputStream().write("x".getBytes()));
+    Camada built = filter.engine();
+    try {
+      assertFalse(built.disabled()); // built with the filter's options, not System.getenv()
+      assertSame(built, Camada.getDefault());
+      assertNotNull(res.getHeader("x-rid"));
+    } finally {
+      Camada.resetDefault();
+    }
   }
 
   @Test
@@ -398,29 +488,25 @@ class FilterTest {
   }
 
   @Test
-  void statusWrapperObservesEveryWayOfSettingAStatus() throws IOException {
-    MockHttpServletResponse res = new MockHttpServletResponse();
-    StatusResponseWrapper w = new StatusResponseWrapper(res);
-    assertEquals(200, w.getStatus());
-    w.setStatus(201);
-    assertEquals(201, w.getStatus());
-    w.sendRedirect("/x");
-    assertEquals(302, w.getStatus());
-    StatusResponseWrapper w2 = new StatusResponseWrapper(new MockHttpServletResponse());
-    w2.sendError(418);
-    assertEquals(418, w2.getStatus());
-    StatusResponseWrapper w3 = new StatusResponseWrapper(new MockHttpServletResponse());
-    w3.sendError(503, "later");
-    assertEquals(503, w3.getStatus());
-    StatusResponseWrapper w4 = new StatusResponseWrapper(new MockHttpServletResponse());
-    w4.setStatus(503);
-    w4.reset(); // sendError commits the response; reset() is only legal before that
-    assertEquals(200, w4.getStatus());
+  void statusWrapperReadsTheContainersResponse() throws IOException {
     // the status set on the container's own response (startAsync() hands the app that one)
     MockHttpServletResponse raw = new MockHttpServletResponse();
-    StatusResponseWrapper w5 = new StatusResponseWrapper(raw);
+    StatusResponseWrapper w = new StatusResponseWrapper(raw);
+    assertEquals(200, w.getStatus());
     raw.setStatus(202);
-    assertEquals(202, w5.getStatus());
+    assertEquals(202, w.getStatus());
+    w.sendError(418);
+    assertEquals(418, w.getStatus());
+    // a host response that cannot say reads as 200 rather than taking the event down
+    StatusResponseWrapper mute =
+        new StatusResponseWrapper(
+            new MockHttpServletResponse() {
+              @Override
+              public int getStatus() {
+                throw new UnsupportedOperationException("no status here");
+              }
+            });
+    assertEquals(200, mute.getStatus());
   }
 
   @Test
@@ -438,7 +524,7 @@ class FilterTest {
     assertEquals("hello world", new String(in.readAllBytes()));
     assertTrue(in.isFinished());
     assertEquals(-1, in.read());
-    assertTrue(w.getInputStream() == in); // one stream per request, as the servlet spec expects
+    assertSame(in, w.getInputStream()); // one stream per request, as the servlet spec expects
     assertThrows(IllegalStateException.class, () -> w.getReader());
     assertThrows(IllegalStateException.class, () -> in.setReadListener(null));
     MockHttpServletRequest req2 = new MockHttpServletRequest();

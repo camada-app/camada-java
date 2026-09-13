@@ -39,6 +39,18 @@ class JsonTest {
   }
 
   @Test
+  void nestingPastTheCapThrowsLikeJunkInsteadOfOverflowingTheStack() {
+    assertEquals(
+        List.of(List.of(List.of())), Json.parse("[".repeat(3) + "]".repeat(3))); // nesting is fine
+    String atCap = "[".repeat(Json.MAX_DEPTH) + "]".repeat(Json.MAX_DEPTH);
+    assertTrue(Json.parse(atCap) instanceof List);
+    assertEquals(Map.of("a", Map.of("b", List.of())), Json.parse("{\"a\":{\"b\":[]}}"));
+    assertThrows(IllegalArgumentException.class, () -> Json.parse("[".repeat(Json.MAX_DEPTH + 1)));
+    assertThrows(IllegalArgumentException.class, () -> Json.parse("[".repeat(32_000)));
+    assertThrows(IllegalArgumentException.class, () -> Json.parse("{\"a\":".repeat(32_000) + "1"));
+  }
+
+  @Test
   void stringifiesCompactlyInInsertionOrder() {
     Map<String, Object> m = new LinkedHashMap<>();
     m.put("z", 1L);

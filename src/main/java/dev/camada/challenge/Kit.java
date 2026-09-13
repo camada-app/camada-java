@@ -1,24 +1,19 @@
 package dev.camada.challenge;
 
+import dev.camada.Redact;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 
 /**
  * The challenge kit over the JDK's HMAC-SHA256 and SHA-256, ported from {@code @camada/core}
- * src/challenge/verify.ts. Synchronous, so the engine's handle() stays a plain method.
+ * src/challenge/verify.ts. The hex and HMAC primitives are {@link Redact}'s: one copy in the SDK.
  */
 public final class Kit {
-  private final byte[] secret;
+  private final String secret;
 
-  private Kit(String secret) {
-    this.secret = secret.getBytes(StandardCharsets.UTF_8);
-  }
-
-  public static Kit create(String secret) {
-    return new Kit(secret);
+  public Kit(String secret) {
+    this.secret = secret;
   }
 
   /**
@@ -26,30 +21,15 @@ public final class Kit {
    */
   public static String sha256Hex(String s) {
     try {
-      return hex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
+      return Redact.hex(
+          MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException("SHA-256 unavailable", e); // every JRE ships it
     }
   }
 
-  static String hex(byte[] bytes) {
-    char[] digits = "0123456789abcdef".toCharArray();
-    char[] out = new char[bytes.length * 2];
-    for (int i = 0; i < bytes.length; i++) {
-      out[i * 2] = digits[(bytes[i] >> 4) & 0xF];
-      out[i * 2 + 1] = digits[bytes[i] & 0xF];
-    }
-    return new String(out);
-  }
-
   private String hmac(String msg) {
-    try {
-      Mac mac = Mac.getInstance("HmacSHA256");
-      mac.init(new SecretKeySpec(secret, "HmacSHA256"));
-      return hex(mac.doFinal(msg.getBytes(StandardCharsets.UTF_8)));
-    } catch (java.security.GeneralSecurityException e) {
-      throw new IllegalStateException("HmacSHA256 unavailable", e);
-    }
+    return Redact.hmacSha256Hex(secret, msg);
   }
 
   private String at(String ip, long day) {

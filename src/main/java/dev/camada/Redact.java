@@ -91,7 +91,7 @@ public final class Redact {
   }
 
   /** HMAC-SHA256 as lower-case hex; the one primitive the challenge kit shares with this file. */
-  static String hmacSha256Hex(String key, String message) {
+  public static String hmacSha256Hex(String key, String message) {
     try {
       Mac mac = Mac.getInstance("HmacSHA256");
       mac.init(new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
@@ -101,7 +101,8 @@ public final class Redact {
     }
   }
 
-  static String hex(byte[] bytes) {
+  /** Lower-case hex, the way the wire spells digests (shared with the challenge kit). */
+  public static String hex(byte[] bytes) {
     char[] digits = "0123456789abcdef".toCharArray();
     char[] out = new char[bytes.length * 2];
     for (int i = 0; i < bytes.length; i++) {

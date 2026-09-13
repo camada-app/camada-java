@@ -300,7 +300,7 @@ class ConformanceTest {
                       Map<String, Object> ev =
                           Builder.build(
                               new RequestInfo("GET", "x.test", "/", "", headers, "1.2.3.4", null),
-                              "sdk-node",
+                              "sdk-java",
                               "r",
                               null,
                               false,

@@ -223,7 +223,7 @@ public final class Matcher {
       return true;
     }
     for (Pattern rx : s.pathsRegex()) {
-      if (rx.matcher(path).find()) {
+      if (Parser.find(rx, path)) {
         return true;
       }
     }

@@ -57,9 +57,9 @@ Camada engine = Camada.getDefault();   // builds the engine; the boot poll is al
 engine.warmUp(5000);                   // bounded: an unreachable analyst leaves it cold, and the app still fails open
 ```
 
-`warmUp(ms)` is the loop written out — it polls `snapshot().verdict(MatchInput.ip("0.0.0.0"))`
-every 10 ms until the reason is no longer `"cold"` or the budget is spent, and returns false
-(never throws) when the engine is inert, killed, or the analyst never answered.
+`warmUp(ms)` is bounded and never throws: false when the engine is inert, killed, or the analyst
+did not answer in time. When the filter was handed `Options`, warm through `camadaFilter.engine()`
+so the default is built with them.
 
 Without `CAMADA_KEY` the engine is inert (one log line, no requests, no enforcement). An app that
 reads its own config builds the engine itself and hands it in — or hands the filter the options
@@ -70,6 +70,11 @@ Camada engine = new Camada(new Options().env(Map.of("CAMADA_KEY", myKey, "CAMADA
 new CamadaFilter(engine);                                   // this engine, not the default
 new CamadaFilter(new Options().env(myEnv));                 // the default engine, built with these options on the first request
 ```
+
+The default is built once, by the first caller, with that caller's options. The static helpers
+(`Camada.scriptTag`, `track`, `serveChallenge`) never build it: on a request the filter did not
+run for, before the filter's first request, they are silent no-ops rather than a
+`System.getenv()` default the filter would then be bound to.
 
 ## What it does per request
 
@@ -167,9 +172,10 @@ outcomes, plus the wire's header order (`hord`) as the container hands it over. 
 what this tap can see and never scores the absence of ASN, country or a TLS fingerprint against a
 request; ASN and country it resolves itself. Enforcement at this position covers ip, path,
 user-agent and header conditions — ASN, country and TLS entries fail open in-app. `matches`
-patterns are JS regexes read by `java.util.regex` (named groups are native; `[^]`, `\cX` and a
-bare `$` are translated; `\d`/`\w`/`\b` stay ASCII); a spelling the engine still rejects never
-matches here, while it does at the edge.
+patterns are JS regexes read by `java.util.regex` (named groups, `[^]`, `\cX` and a bare `$` are
+translated; `\d`/`\w`/`\b` stay ASCII); a spelling the engine still rejects — or a pattern it
+cannot run against a request without overflowing the thread's stack — never matches here, while
+it does at the edge.
 
 ## Deploying it
 

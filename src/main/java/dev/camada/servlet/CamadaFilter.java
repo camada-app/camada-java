@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * The jakarta.servlet Filter: register it first (Spring Boot: a FilterRegistrationBean at
  * Ordered.HIGHEST_PRECEDENCE) so camada answers before routing. On a {@link Passed} it stamps x-rid
  * and the _sfp cookie BEFORE the chain runs, stores the {@link dev.camada.Context} as the "camada"
- * request attribute, observes the status through {@link StatusResponseWrapper}, and fires
+ * request attribute, reads the status through {@link StatusResponseWrapper}, and fires
  * onFinish(status) exactly once: after the chain returns, in the AsyncListener's onComplete when
  * the app went async, or with 500 when the chain throws (the exception propagates unchanged). Only
  * the original REQUEST dispatch is handled; ASYNC, ERROR, FORWARD and INCLUDE dispatches pass
@@ -97,7 +97,7 @@ public final class CamadaFilter implements Filter {
       }
     } catch (RuntimeException | IOException err) {
       Guarded.logRateLimited(err);
-      chain.doFilter(forApp, res);
+      chain.doFilter(req, res); // nothing was read past readBody(): the app gets the original
       return;
     }
     Result result = eng.handle(r, body);
@@ -206,8 +206,7 @@ public final class CamadaFilter implements Filter {
         proto != null && proto.startsWith("HTTP/") ? proto.substring(5) : null,
         r.getRemoteAddr(),
         r.isSecure(),
-        headers,
-        null);
+        headers);
   }
 
   /**
