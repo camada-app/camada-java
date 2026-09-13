@@ -1,6 +1,8 @@
 package dev.camada.events;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.camada.FakeAnalyst;
@@ -180,7 +182,8 @@ class QueueTest {
         found = t;
       }
     }
-    assertTrue(found != null && found.isDaemon());
+    assertNotNull(found);
+    assertTrue(found.isDaemon());
     q.stop();
   }
 
@@ -246,6 +249,6 @@ class QueueTest {
     q.installExitFlush();
     assertTrue(q.exitHookInstalled());
     q.stop();
-    assertTrue(!q.exitHookInstalled());
+    assertFalse(q.exitHookInstalled());
   }
 }

@@ -7,8 +7,8 @@ import java.util.Map;
 /**
  * What an adapter hands the engine. Header names are lower-cased; the list keeps the order the host
  * gave. {@code path} carries no query; {@code query} has the leading '?' or is empty; {@code peer}
- * is the socket peer the host vouches for; {@code route} is the matched route pattern when the host
- * knows it at request time (the servlet filter learns it at finish, through the Context).
+ * is the socket peer the host vouches for. The matched route pattern is not here: the host learns
+ * it at finish time and sets it through the {@link Context}.
  */
 public record Req(
     String method,
@@ -18,8 +18,7 @@ public record Req(
     String httpVersion,
     String peer,
     boolean https,
-    List<Map.Entry<String, String>> headers,
-    String route) {
+    List<Map.Entry<String, String>> headers) {
 
   public Req {
     query = query == null ? "" : query;

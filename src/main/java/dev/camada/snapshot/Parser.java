@@ -1,5 +1,6 @@
 package dev.camada.snapshot;
 
+import dev.camada.Config;
 import dev.camada.Json;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -8,6 +9,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -195,6 +197,19 @@ public final class Parser {
   }
 
   /**
+   * A pattern this runtime cannot run against this input never matches, and never throws:
+   * java.util.regex recurses per group iteration, so a nested quantifier against a long path or
+   * user agent overflows the request thread's stack where JS and Python's engines would not.
+   */
+  public static boolean find(Pattern rx, String input) {
+    try {
+      return rx.matcher(input).find();
+    } catch (StackOverflowError e) {
+      return false;
+    }
+  }
+
+  /**
    * A pattern this runtime rejects never matches, and never throws (fail open). Patterns are
    * authored as JS regexes (the analyst validates them with {@code new RegExp}), so the JS
    * spellings java.util.regex reads differently are translated first — see {@link #jsToJava} — and
@@ -211,13 +226,17 @@ public final class Parser {
   /**
    * The JS spellings a tenant is likely to author and Java reads differently: {@code [^]} (any
    * char) -> {@code [\s\S]}, {@code \cX} -> the control character (Java's own \c reads a lower-case
-   * letter differently), and a bare {@code $} -> {@code \z} (Java's $ also accepts a final newline;
-   * JS's does not). {@code (?<name>} is native. Anything else the engine rejects still fails open.
+   * letter differently), a bare {@code $} -> {@code \z} (Java's $ also accepts a final newline;
+   * JS's does not), and a named group {@code (?<name>} -> a plain {@code (} with {@code \k<name>}
+   * -> its number (JS admits {@code _} and {@code $} in a name, Java only letters and digits;
+   * nothing in the SDK reads the names). Anything else the engine rejects still fails open.
    */
   static String jsToJava(String pattern) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
+    int groups = 0; // capturing groups so far: what a \k<name> back-reference becomes
+    Map<String, Integer> named = new HashMap<>();
     int i = 0;
     while (i < n) {
       char ch = pattern.charAt(i);
@@ -228,6 +247,15 @@ public final class Parser {
           out.append(String.format("\\x%02X", code));
           i += 3;
           continue;
+        }
+        if (nxt == 'k' && !inClass && i + 2 < n && pattern.charAt(i + 2) == '<') {
+          int close = pattern.indexOf('>', i + 3);
+          Integer num = close < 0 ? null : named.get(pattern.substring(i + 3, close));
+          if (num != null) {
+            out.append("(?:\\").append(num).append(')'); // grouped: a digit may follow
+            i = close + 1;
+            continue;
+          }
         }
         out.append(ch).append(nxt);
         i += 2;
@@ -246,6 +274,22 @@ public final class Parser {
         out.append("\\z");
         i++;
         continue;
+      } else if (ch == '(') {
+        if (i + 1 >= n || pattern.charAt(i + 1) != '?') {
+          groups++;
+        } else if (i + 2 < n
+            && pattern.charAt(i + 2) == '<'
+            && i + 3 < n
+            && pattern.charAt(i + 3) != '='
+            && pattern.charAt(i + 3) != '!') {
+          int close = pattern.indexOf('>', i + 3);
+          if (close > 0) {
+            named.put(pattern.substring(i + 3, close), ++groups);
+            out.append('(');
+            i = close + 1;
+            continue;
+          }
+        }
       }
       out.append(ch);
       i++;
@@ -295,7 +339,7 @@ public final class Parser {
     Function<RuleRequest, String> read;
     if (f.equals("header")) {
       Object name = c.get("name");
-      String hname = name == null ? "" : String.valueOf(name).toLowerCase(java.util.Locale.ROOT);
+      String hname = name == null ? "" : String.valueOf(name).toLowerCase(Locale.ROOT);
       read =
           r -> {
             if (hname.isEmpty() || r.header == null) {
@@ -340,7 +384,7 @@ public final class Parser {
         Pattern rx = compileRegex(first);
         return r -> {
           String v = read.apply(r);
-          return v != null && rx != null && rx.matcher(v).find();
+          return v != null && rx != null && find(rx, v);
         };
       case "contains":
         return r -> {
@@ -470,7 +514,7 @@ public final class Parser {
     }
     IntBuffer s6 = sec.getOrDefault(5, EMPTY);
     List<Pattern> regex = new ArrayList<>();
-    for (String p : dev.camada.Config.strings(meta.get("pathsRegex"))) {
+    for (String p : Config.strings(meta.get("pathsRegex"))) {
       Pattern rx = compileRegex(p);
       if (rx != null) {
         regex.add(rx);

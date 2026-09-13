@@ -35,7 +35,7 @@ public class ChallengeTest {
   class Nonce {
     @Test
     void deterministicPerIpAndUtcDay() {
-      Kit kit = Kit.create("secret");
+      Kit kit = new Kit("secret");
       String a = kit.nonce(IP, NOW);
       String b = kit.nonce(IP, NOW + 1000);
       assertEquals(a, b);
@@ -43,12 +43,12 @@ public class ChallengeTest {
       assertTrue(a.matches("[0-9a-f]{32}"));
       assertNotEquals(a, kit.nonce("203.0.113.10", NOW));
       assertNotEquals(a, kit.nonce(IP, NOW + DAY_MS));
-      assertNotEquals(a, Kit.create("other").nonce(IP, NOW));
+      assertNotEquals(a, new Kit("other").nonce(IP, NOW));
     }
 
     @Test
     void acceptsTodayAndYesterdayRejectsOlderAndForgeries() {
-      Kit kit = Kit.create("secret");
+      Kit kit = new Kit("secret");
       String yesterday = kit.nonce(IP, NOW - DAY_MS);
       assertTrue(kit.nonceValid(IP, NOW, kit.nonce(IP, NOW)));
       assertTrue(kit.nonceValid(IP, NOW, yesterday));
@@ -64,7 +64,7 @@ public class ChallengeTest {
   class Token {
     @Test
     void roundTripsWithinTheHourAndExpiresAfter() {
-      Kit kit = Kit.create("secret");
+      Kit kit = new Kit("secret");
       String t = kit.issue(IP, NOW);
       assertTrue(kit.tokenValid(IP, NOW + 3_599_000, t));
       assertFalse(kit.tokenValid(IP, NOW + 3_600_000, t));
@@ -72,7 +72,7 @@ public class ChallengeTest {
 
     @Test
     void boundToTheIpAndUnforgeable() {
-      Kit kit = Kit.create("secret");
+      Kit kit = new Kit("secret");
       String t = kit.issue(IP, NOW);
       assertFalse(kit.tokenValid("203.0.113.10", NOW, t));
       String exp = t.substring(0, t.indexOf('.'));
@@ -87,7 +87,7 @@ public class ChallengeTest {
 
     @Test
     void refusesAnExpiryFurtherOutThanTheTtl() {
-      Kit kit = Kit.create("secret");
+      Kit kit = new Kit("secret");
       String far = kit.issue(IP, NOW + 10_000_000); // minted "in the future": exp > now + TTL
       assertFalse(kit.tokenValid(IP, NOW, far));
     }
@@ -97,7 +97,7 @@ public class ChallengeTest {
   class ProofOfWork {
     @Test
     void acceptsA16BitSolutionAndRejectsAnythingElse() {
-      Kit kit = Kit.create("secret");
+      Kit kit = new Kit("secret");
       String nonce = kit.nonce(IP, NOW);
       String sol = solve(nonce);
       assertTrue(kit.solutionOk(nonce, sol));

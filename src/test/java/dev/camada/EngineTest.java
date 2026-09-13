@@ -13,7 +13,9 @@ import static dev.camada.FakeAnalyst.WARN_UA;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -308,7 +310,7 @@ class EngineTest {
       assertEquals(r.header("x-rid"), ctx.rid());
       assertEquals(Hosts.PEER, ctx.ip());
       assertNotNull(ctx.sid());
-      assertTrue(Camada.engineFor(ctx) == h.engine);
+      assertSame(h.engine, Camada.engineFor(ctx));
     }
 
     @Test
@@ -802,6 +804,71 @@ class EngineTest {
       assertNull(r.header("x-rid"));
     }
 
+    /** Runs on a thread with a stack the size a container's request thread gets (or less). */
+    static Reply onASmallStack(Host h, Call c) {
+      Reply[] out = new Reply[1];
+      Throwable[] err = new Throwable[1];
+      Thread t =
+          new Thread(
+              null,
+              () -> {
+                try {
+                  out[0] = h.drv.call(c);
+                } catch (Throwable e) {
+                  err[0] = e;
+                }
+              },
+              "small-stack",
+              512 * 1024);
+      t.start();
+      try {
+        t.join();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      if (err[0] != null) {
+        throw new AssertionError("escaped the fail-open envelope: " + err[0], err[0]);
+      }
+      return out[0];
+    }
+
+    @Test
+    void aRegexTheEngineCannotRunNeverMatchesAndNeverThrows() {
+      // Analyst-valid (no ReDoS by its own checker), but java.util.regex recurses once per group
+      // iteration: against a 4 KB path it overflows a request thread's stack where JS and Python
+      // would answer. The request passes (fail open) and the app answers it.
+      analyst.container = "v5";
+      analyst.metaExtra.put("pathsRegex", List.of("^(/[a-z0-9]+)*$"));
+      analyst.metaExtra.put(
+          "rules",
+          List.of(
+              Map.of(
+                  "id",
+                  "nested",
+                  "action",
+                  "block",
+                  "conds",
+                  List.of(Map.of("f", "ua", "op", "matches", "v", "(foo|bar)*baz")))));
+      Host h = new Host();
+      String longPath = "/a".repeat(2048);
+      assertEquals(200, onASmallStack(h, new Call("GET", longPath)).status());
+      assertEquals(
+          200,
+          onASmallStack(h, new Call("GET", "/").header("user-agent", "foo".repeat(2600))).status());
+      // the same patterns still decide what they can run
+      assertEquals(403, onASmallStack(h, new Call("GET", "/a/b")).status());
+      assertEquals(
+          403, onASmallStack(h, new Call("GET", "/x-y").header("user-agent", "foobaz")).status());
+    }
+
+    @Test
+    void aDeeplyNestedBeaconBodyIsDroppedNotThrown() {
+      Host h = new Host();
+      Reply r = onASmallStack(h, new Call("POST", "/_cam/fp").body("[".repeat(32_000)));
+      assertEquals(204, r.status());
+      assertEquals(0, h.events().size());
+    }
+
     @Test
     void wantsBodyOnlyForCamadasOwnPosts() {
       Host h = new Host();
@@ -831,9 +898,8 @@ class EngineTest {
       assertNotNull(engine.snapshot());
       assertTrue(engine.warmUp(5000));
       assertTrue(engine.snapshot().verdict(MatchInput.ip(BLOCKED_IP)).block());
-      assertTrue(Camada.getDefault() == engine);
-      assertTrue(
-          Camada.getDefault(new Options()) == engine); // options are for the first build only
+      assertSame(engine, Camada.getDefault());
+      assertSame(engine, Camada.getDefault(new Options())); // options are for the first build only
     }
 
     @Test
@@ -850,8 +916,8 @@ class EngineTest {
     void configureReplacesAndStopsTheOldEngine() {
       Camada first = Camada.configure(new Options().env(Hosts.ENV).transport(analyst));
       Camada second = Camada.configure(new Options().env(Hosts.ENV).transport(analyst));
-      assertTrue(first != second);
-      assertTrue(Camada.getDefault() == second);
+      assertNotSame(first, second);
+      assertSame(second, Camada.getDefault());
       first.queue().push(Map.of("i", 1L));
       Hosts.sleep(30);
       assertEquals(0, analyst.events.size()); // the stopped queue never flushes on its own
