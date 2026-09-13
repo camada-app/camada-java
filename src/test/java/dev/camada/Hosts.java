@@ -170,7 +170,6 @@ public final class Hosts {
 
   /** The servlet host: CamadaFilter in front of a FilterChain that runs the handler. */
   public static final class ServletDriver {
-    public final String name = "servlet";
     public final List<HttpServletRequest> seen = Collections.synchronizedList(new ArrayList<>());
     public final CamadaFilter filter;
     private final AppHandler handler;

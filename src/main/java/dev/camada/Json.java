@@ -9,10 +9,15 @@ import java.util.Map;
  * The minimal JSON the SDK needs and the JDK does not ship: snapshot meta, x-camada-config, the
  * event batches and the beacon body. Objects parse to insertion-ordered maps, integers to Long,
  * every other number to Double (NaN and 1e999 included, as Python's json admits them — the config
- * reader guards against them), junk throws IllegalArgumentException. No runtime dependency.
+ * reader guards against them), junk throws IllegalArgumentException — as does nesting past {@link
+ * #MAX_DEPTH}: the parser recurses per level, and a 32 KB beacon body of '[' must be a dropped
+ * body, not a StackOverflowError on the request thread. No runtime dependency.
  */
 public final class Json {
   private Json() {}
+
+  /** Nesting the parser accepts; nothing on the wire goes past a handful of levels. */
+  public static final int MAX_DEPTH = 512;
 
   /** The object behind a parsed value, or null when it is not a JSON object. */
   @SuppressWarnings("unchecked")
@@ -34,6 +39,7 @@ public final class Json {
   private static final class Parser {
     final String s;
     int i;
+    int depth;
 
     Parser(String s) {
       this.s = s;
@@ -107,12 +113,20 @@ public final class Json {
       i += word.length();
     }
 
+    void descend() {
+      if (++depth > MAX_DEPTH) {
+        throw error("nesting deeper than " + MAX_DEPTH);
+      }
+    }
+
     Map<String, Object> object() {
       expect('{');
+      descend();
       Map<String, Object> out = new LinkedHashMap<>();
       skipWs();
       if (peek() == '}') {
         i++;
+        depth--;
         return out;
       }
       while (true) {
@@ -126,6 +140,7 @@ public final class Json {
         char c = peek();
         i++;
         if (c == '}') {
+          depth--;
           return out;
         }
         if (c != ',') {
@@ -136,10 +151,12 @@ public final class Json {
 
     List<Object> array() {
       expect('[');
+      descend();
       List<Object> out = new ArrayList<>();
       skipWs();
       if (peek() == ']') {
         i++;
+        depth--;
         return out;
       }
       while (true) {
@@ -149,6 +166,7 @@ public final class Json {
         char c = peek();
         i++;
         if (c == ']') {
+          depth--;
           return out;
         }
         if (c != ',') {

@@ -56,8 +56,8 @@ public final class FakeAnalyst implements Transport {
   public volatile boolean ingestDown;
   public volatile Integer snapshotStatus; // force a status (204, 304, 401, 500)
   public volatile String container = "v3"; // v3 | v4 | v5
-  public volatile boolean gzip; // gzip the frame when the client asks for it
-  public volatile int ingestStatus = 202;
+  public final Map<String, Object> metaExtra =
+      Collections.synchronizedMap(new LinkedHashMap<>()); // laid over the fixture's meta
 
   public FakeAnalyst() {
     config.put("tenant", "acme");
@@ -69,7 +69,11 @@ public final class FakeAnalyst implements Transport {
   }
 
   public Map<String, Object> meta() {
-    return Fixtures.readMeta(META_FILES.get(container));
+    Map<String, Object> m = new LinkedHashMap<>(Fixtures.readMeta(META_FILES.get(container)));
+    synchronized (metaExtra) {
+      m.putAll(metaExtra);
+    }
+    return m;
   }
 
   public byte[] binary() {
@@ -125,10 +129,6 @@ public final class FakeAnalyst implements Transport {
       }
       byte[] body = frame(meta(), binary());
       headers.put("etag", etag());
-      if (gzip && req.headers().getOrDefault("accept-encoding", "").contains("gzip")) {
-        headers.put("content-encoding", "gzip");
-        body = gzipBytes(body);
-      }
       return new Response(200, headers, body);
     }
     if (ingestDown) {
@@ -142,7 +142,7 @@ public final class FakeAnalyst implements Transport {
         batch.add(Json.asMap(o));
       }
       events.add(batch);
-      return new Response(ingestStatus, Map.of(), new byte[0]);
+      return new Response(202, Map.of(), new byte[0]);
     }
     fail("unmocked request: " + req.url());
     return null;

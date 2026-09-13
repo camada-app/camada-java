@@ -83,7 +83,7 @@ public class Camada {
     }
     snap = c;
     queue = q;
-    kit = Kit.create(env.secret());
+    kit = new Kit(env.secret());
     snap.start();
     queue.installExitFlush();
   }
@@ -131,10 +131,14 @@ public class Camada {
   }
 
   /**
-   * The engine that produced a request context, else the default: what the helpers resolve through.
+   * The engine that produced a request context, else the default as it stands, else null: what the
+   * helpers resolve through. A peek, never a build — the default is built once, by the first
+   * caller, with that caller's options; a helper running before the filter's first request (a
+   * handler outside its mapping, say) must not build an inert default from System.getenv() that a
+   * filter handed Options is then bound to for the JVM's life.
    */
   public static Camada engineFor(Context ctx) {
-    return ctx != null && ctx.engine != null ? ctx.engine : getDefault();
+    return ctx != null && ctx.engine != null ? ctx.engine : defaultEngine;
   }
 
   private static Camada create(Options opts) {
@@ -233,6 +237,11 @@ public class Camada {
     return new AbstractMap.SimpleEntry<>(k, v);
   }
 
+  /** Whether the cookies camada sets carry Secure: the session and challenge cookies must agree. */
+  private static boolean secure(Req req) {
+    return req.https() || "https".equals(req.header("x-forwarded-proto"));
+  }
+
   // ---- the adapter contract ----
 
   /**
@@ -259,14 +268,17 @@ public class Camada {
   public Result handle(Req req, byte[] body) {
     try {
       return decide(req, body);
-    } catch (RuntimeException err) { // a camada bug costs the join, never the request
+    } catch (RuntimeException | StackOverflowError err) {
+      // A camada bug costs the join, never the request. StackOverflowError is an Error, but it is
+      // the one a tenant's regex (java.util.regex recurses per group iteration) or a deeply nested
+      // beacon body can raise on a request thread — Python's re and json fail open there.
       Guarded.logRateLimited(err);
       return Passed.INERT;
     }
   }
 
   protected Result decide(Req req, byte[] body) {
-    if (disabled() || snap == null || queue == null || env == null) {
+    if (disabled()) {
       return Passed.INERT;
     }
     long t0 = System.nanoTime();
@@ -285,18 +297,13 @@ public class Camada {
       headers.add(h("x-block-reason", v.reason() == null ? "" : v.reason()));
       headers.add(h("x-block-version", v.version() == null ? "" : v.version()));
       if (v.rule() != null) {
-        headers.add(
-            h(
-                "x-block-rule",
-                v.rule())); // a custom rule blocked: name it, so the customer knows which row to
-        // edit
+        // a custom rule blocked: name it, so the customer knows which row to edit
+        headers.add(h("x-block-rule", v.rule()));
       }
       Map<String, Object> ev = event(req, UUID.randomUUID().toString(), null, false, ip);
       ev.put("st", 403); // blocked requests always ship: silent expiry makes blocks oscillate
-      ev.put(
-          "blk",
-          v.reason()); // the reason rides the event so the analyst counts SDK blocks, not the
-      // app's own 403s
+      // the reason rides the event so the analyst counts SDK blocks, not the app's own 403s
+      ev.put("blk", v.reason());
       if (v.rule() != null) {
         ev.put("rl", v.rule());
       }
@@ -309,13 +316,14 @@ public class Camada {
     // A challenge needs a resolved client IP: the nonce and the _cch cookie are bound to it,
     // so without one a single solve would mint a cookie every unidentified client could
     // present. No ip -> no challenge (fail open), the same stance ip rules take.
+    String sid = cookieValue(req.header("cookie"), Constants.SESSION_COOKIE);
     if (challengeOn && ip != null && !ip.isEmpty()) {
       // The verify endpoint answers first: a challenged client must be able to reach it.
       if ("POST".equals(req.method()) && req.path().equals(challengePath)) {
-        return verify(req, body, ip);
+        return verify(req, body, ip, sid);
       }
       if (v.challenge() && !challengePassed(req, ip)) {
-        return serveChallenge(req, ip, cookieValue(req.header("cookie"), Constants.SESSION_COOKIE));
+        return serveChallenge(req, ip, sid);
       }
     }
 
@@ -334,12 +342,10 @@ public class Camada {
     }
 
     String rid = UUID.randomUUID().toString();
-    String sid = cookieValue(req.header("cookie"), Constants.SESSION_COOKIE);
     boolean newSession = sid == null || sid.isEmpty();
     String setCookie = null;
     if (newSession) {
       sid = UUID.randomUUID().toString();
-      boolean secure = req.https() || "https".equals(req.header("x-forwarded-proto"));
       setCookie =
           Constants.SESSION_COOKIE
               + "="
@@ -347,7 +353,7 @@ public class Camada {
               + "; Path=/; Max-Age="
               + Constants.SESSION_MAX_AGE
               + "; HttpOnly; SameSite=Lax"
-              + (secure ? "; Secure" : "");
+              + (secure(req) ? "; Secure" : "");
     }
     Context ctx = new Context(rid, sid, ip, req, this);
 
@@ -380,7 +386,7 @@ public class Camada {
             Map<String, Object> ev = event(req, rid, finalSid, newSession, ip);
             ev.put("st", status);
             ev.put("dur", (System.nanoTime() - t0) / 1_000_000L);
-            String route = ctx.route != null ? ctx.route : req.route();
+            String route = ctx.route;
             if (route != null && !route.isEmpty()) {
               ev.put("rt", route);
             }
@@ -388,7 +394,7 @@ public class Camada {
               ev.put("wrn", warnRule); // §D3: the warn rule that let this request through
             }
             queue.push(ev);
-          } catch (RuntimeException err) {
+          } catch (RuntimeException | StackOverflowError err) {
             Guarded.logRateLimited(err);
           }
         };
@@ -450,8 +456,7 @@ public class Camada {
   // ---- challenge ----
 
   private boolean challengePassed(Req req, String ip) {
-    return kit != null
-        && kit.tokenValid(ip, nowMs(), cookieValue(req.header("cookie"), Format.CHALLENGE_COOKIE));
+    return kit.tokenValid(ip, nowMs(), cookieValue(req.header("cookie"), Format.CHALLENGE_COOKIE));
   }
 
   private Answer page(String ip, String to) {
@@ -489,8 +494,8 @@ public class Camada {
       ev.put("st", 403);
       ev.put("blk", "challenge");
       queue.push(ev);
-    } catch (RuntimeException err) { // the response is decided; telemetry must never undo that
-      Guarded.logRateLimited(err);
+    } catch (RuntimeException | StackOverflowError err) {
+      Guarded.logRateLimited(err); // the response is decided; telemetry must never undo that
     }
     return answer;
   }
@@ -499,7 +504,7 @@ public class Camada {
    * POST from the challenge page: validate the nonce and the proof of work, set _cch, 302 back to
    * the (sanitised, same-site) original URL, and ship {@code { st: 200, ch: 1 }}.
    */
-  private Answer verify(Req req, byte[] body, String ip) {
+  private Answer verify(Req req, byte[] body, String ip, String sid) {
     if (body == null) {
       return new Answer(413, List.of(), new byte[0]);
     }
@@ -509,15 +514,8 @@ public class Camada {
     if (!kit.verify(ip, now, form.get("nonce"), form.get("solution"))) {
       return page(ip, to);
     }
-    boolean secure = req.https() || "https".equals(req.header("x-forwarded-proto"));
-    String cookie = Format.challengeCookie(kit.issue(ip, now), secure);
-    Map<String, Object> ev =
-        event(
-            req,
-            UUID.randomUUID().toString(),
-            cookieValue(req.header("cookie"), Constants.SESSION_COOKIE),
-            false,
-            ip);
+    String cookie = Format.challengeCookie(kit.issue(ip, now), secure(req));
+    Map<String, Object> ev = event(req, UUID.randomUUID().toString(), sid, false, ip);
     ev.put("st", 200);
     ev.put("ch", 1); // challenge passed (contract §A3 ingest field)
     queue.push(ev);
@@ -534,7 +532,7 @@ public class Camada {
    */
   public Answer serveChallenge(Context ctx) {
     try {
-      if (disabled() || kit == null || ctx == null) {
+      if (disabled() || ctx == null) {
         return null;
       }
       Req req = ctx.req;
@@ -544,7 +542,7 @@ public class Camada {
       }
       ctx.challenged = true;
       return serveChallenge(req, ip, ctx.sid());
-    } catch (RuntimeException err) {
+    } catch (RuntimeException | StackOverflowError err) {
       Guarded.logRateLimited(err);
       return null;
     }
@@ -558,7 +556,7 @@ public class Camada {
    */
   public void track(Context ctx, String event, String user) {
     try {
-      if (disabled() || queue == null || env == null) {
+      if (disabled()) {
         return;
       }
       String uid =
@@ -572,7 +570,7 @@ public class Camada {
       row.put("ip", ctx != null ? ctx.ip() : null);
       row.put("ts", nowMs());
       queue.push(row);
-    } catch (RuntimeException err) {
+    } catch (RuntimeException | StackOverflowError err) {
       Guarded.logRateLimited(err);
     }
   }
@@ -595,17 +593,22 @@ public class Camada {
   }
 
   /**
-   * For HTML templates: {@code <script src="/_cam/b.js?r=<rid>" async></script>}, or "" when off.
+   * For HTML templates: {@code <script src="/_cam/b.js?r=<rid>" async></script>}, or "" when off
+   * (or when no engine exists yet: the helpers never build the default, see {@link #engineFor}).
    */
   public static String scriptTag(HttpServletRequest req) {
     Context ctx = contextOf(req);
-    return engineFor(ctx).scriptTag(ctx);
+    Camada eng = engineFor(ctx);
+    return eng == null ? "" : eng.scriptTag(ctx);
   }
 
   /** {@code Camada.track(req, "login_failed", email)} from a handler; never throws. */
   public static void track(HttpServletRequest req, String event, String user) {
     Context ctx = contextOf(req);
-    engineFor(ctx).track(ctx, event, user);
+    Camada eng = engineFor(ctx);
+    if (eng != null) {
+      eng.track(ctx, event, user);
+    }
   }
 
   /**
@@ -616,7 +619,8 @@ public class Camada {
   public static boolean serveChallenge(HttpServletRequest req, HttpServletResponse res)
       throws IOException {
     Context ctx = contextOf(req);
-    Answer a = engineFor(ctx).serveChallenge(ctx);
+    Camada eng = engineFor(ctx);
+    Answer a = eng == null ? null : eng.serveChallenge(ctx);
     if (a == null) {
       return false;
     }

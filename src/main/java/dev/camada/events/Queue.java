@@ -31,14 +31,14 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class Queue {
   private final String url; // ingest base, e.g. https://analyst.example.com
   private final String token; // ingest token (x-tenant header)
-  private volatile int maxBatch =
-      500; // flush when the queue reaches this many (server caps at 1000)
+  // flush when the queue reaches this many (server caps at 1000)
+  private volatile int maxBatch = 500;
   private volatile int maxQueue = 2000; // drop-oldest beyond this
   private volatile long flushMs = 15_000;
   private volatile long timeoutMs = 2000;
   private volatile Transport transport = new HttpTransport();
-  private volatile String
-      sdk; // '<package>/<version>': sent as x-camada-sdk on every batch (SDK-03)
+  // '<package>/<version>': sent as x-camada-sdk on every batch (SDK-03)
+  private volatile String sdk;
   private final AtomicInteger dropped = new AtomicInteger(); // debug counter, not an API promise
 
   private final ArrayDeque<Object> q = new ArrayDeque<>();

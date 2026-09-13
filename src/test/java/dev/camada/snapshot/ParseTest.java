@@ -207,8 +207,21 @@ class ParseTest {
     assertEquals("end", m3.match(MatchInput.ip(null).withUa("x")).rule());
     assertNull(m3.match(MatchInput.ip(null).withUa("x\n")).rule());
     assertEquals("^a[\\s\\S]b\\x0A\\z", Parser.jsToJava("^a[^]b\\cJ$"));
-    assertEquals("[$]\\$a(?<n>b)(?<=c)", Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)"));
+    assertEquals("[$]\\$a(b)(?<=c)(?<!d)", Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)(?<!d)"));
     assertEquals("a\\x0A", Parser.jsToJava("a\\cj")); // JS reads \cj as \cJ; Java would not
+    // JS admits _ and $ in a group name; Java only letters and digits, so names are dropped and a
+    // \k<name> back-reference becomes its number (nothing in the SDK reads the names)
+    Matcher m4 =
+        rulesSnapshot(
+            "[{\"id\":\"u\",\"action\":\"block\",\"conds\":[{\"f\":\"path\",\"op\":\"matches\",\"v\":\"^/u/(?<user_id>\\\\d+)/(?<$x>[a-z]+)/\\\\k<user_id>0$\"}]}]");
+    assertEquals("u", m4.match(MatchInput.ip(null).withPath("/u/7/a/70")).rule());
+    assertNull(m4.match(MatchInput.ip(null).withPath("/u/7/a/80")).rule());
+    assertNull(m4.match(MatchInput.ip(null).withPath("/u/7/a/7")).rule());
+    assertEquals(
+        "^(a)(?:x)(\\d)(?:\\2)\\k<m>[(?<n>]",
+        Parser.jsToJava(
+            "^(a)(?:x)(?<n>\\d)\\k<n>\\k<m>[(?<n>]")); // \k<m>: no such group, left alone
+    assertNull(Parser.compileRegex("(?<user_id>a)\\k<nope>")); // an unknown name still fails open
   }
 
   @Test

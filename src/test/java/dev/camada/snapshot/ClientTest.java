@@ -1,10 +1,12 @@
 package dev.camada.snapshot;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpServer;
@@ -166,7 +168,7 @@ class ClientTest {
         req -> a.send(new Request(req.method(), req.url(), Map.of(), null, req.timeoutMs()));
     c.transport(again);
     c.refresh();
-    assertTrue(c.matcher() == first);
+    assertSame(first, c.matcher());
   }
 
   @Test
@@ -270,9 +272,9 @@ class ClientTest {
           ex.close();
         });
     srv.start();
+    Transport t = new HttpTransport();
     try {
       int port = srv.getAddress().getPort();
-      Transport t = new HttpTransport();
       Response r =
           t.send(
               new Request(
@@ -282,7 +284,7 @@ class ClientTest {
                   null,
                   2000));
       assertEquals(200, r.status());
-      assertTrue(java.util.Arrays.equals(payload, r.body()));
+      assertArrayEquals(payload, r.body());
       assertEquals("\"z\"", r.headers().get("etag"));
       assertFalse(r.headers().containsKey("content-encoding"));
       Response e =
@@ -297,15 +299,10 @@ class ClientTest {
     } finally {
       srv.stop(0);
     }
-    Response dead =
-        t2().send(new Request("GET", "http://127.0.0.1:1/snapshot", Map.of(), null, 200));
+    Response dead = t.send(new Request("GET", "http://127.0.0.1:1/snapshot", Map.of(), null, 200));
     assertEquals(0, dead.status());
-    Response bad = t2().send(new Request("GET", "not a url", Map.of(), null, 200));
+    Response bad = t.send(new Request("GET", "not a url", Map.of(), null, 200));
     assertEquals(0, bad.status());
-  }
-
-  static Transport t2() {
-    return new HttpTransport();
   }
 
   @Test
