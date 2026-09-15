@@ -14,7 +14,7 @@
 
   <name>camada</name>
   <description>camada SDK for Java: inline enforcement of your snapshot (ordered custom rules, then allow, block, challenge), first-party beacon and proof-of-work challenge, batched event shipping. A jakarta.servlet Filter for Spring Boot, Tomcat, Jetty and Undertow.</description>
-  <url>https://camada.dev</url>
+  <url>https://camada.app</url>
   <licenses>
     <license>
       <name>MIT</name>
