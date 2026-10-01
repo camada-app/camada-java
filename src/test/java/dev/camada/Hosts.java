@@ -1,10 +1,9 @@
 package dev.camada;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.camada.servlet.CamadaFilter;
-import dev.camada.snapshot.Matcher.MatchInput;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -136,13 +135,7 @@ public final class Hosts {
 
   public static void loaded(Camada engine) {
     assertNotNull(engine.snapshot());
-    for (int k = 0; k < 400; k++) {
-      if (!"cold".equals(engine.snapshot().verdict(MatchInput.ip("0.0.0.0")).reason())) {
-        return;
-      }
-      sleep(5);
-    }
-    fail("snapshot never loaded");
+    assertTrue(engine.warmUp(2000), "snapshot never loaded");
   }
 
   public static void sleep(long ms) {

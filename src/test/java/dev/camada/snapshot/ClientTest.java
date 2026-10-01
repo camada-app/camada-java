@@ -22,6 +22,8 @@ import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -76,6 +78,42 @@ class ClientTest {
     assertEquals("acme", c.config().tenant());
     assertEquals(Boolean.TRUE, c.config().beacon());
     assertEquals("none", c.config().trustedProxy().mode());
+  }
+
+  @Test
+  void staysColdUntilTheFirstLoadIsFullyPublished() throws Exception {
+    // warmUp() and the request path read "not cold" as "rules in place": the first load must not
+    // look loaded while its matcher and config are still being read.
+    FakeAnalyst a = new FakeAnalyst();
+    CountDownLatch reading = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    Client c =
+        client(a)
+            .transport(
+                req -> {
+                  Response r = a.send(req);
+                  Map<String, String> slow =
+                      new HashMap<>(r.headers()) {
+                        @Override
+                        public String get(Object k) {
+                          reading.countDown();
+                          try {
+                            release.await();
+                          } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                          }
+                          return super.get(k);
+                        }
+                      };
+                  return new Response(r.status(), slow, r.body());
+                });
+    Thread load = new Thread(c::refresh);
+    load.start();
+    assertTrue(reading.await(5, TimeUnit.SECONDS));
+    assertEquals("cold", c.verdict(MatchInput.ip(FakeAnalyst.BLOCKED_IP)).reason());
+    release.countDown();
+    load.join(5000);
+    assertTrue(c.verdict(MatchInput.ip(FakeAnalyst.BLOCKED_IP)).block());
   }
 
   @Test
