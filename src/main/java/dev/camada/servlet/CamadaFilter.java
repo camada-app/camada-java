@@ -114,7 +114,7 @@ public final class CamadaFilter implements Filter {
     if (p.ctx() != null) {
       req.setAttribute("camada", p.ctx());
     }
-    if (p.rid() != null) {
+    if (p.rid() != null && !websocketHandshake(req)) {
       res.setHeader("x-rid", p.rid());
     }
     if (p.setCookie() != null) {
@@ -173,6 +173,15 @@ public final class CamadaFilter implements Filter {
       return;
     }
     finish.run();
+  }
+
+  /**
+   * x-rid never rides a 101, and a container answers a websocket handshake 101 from inside its own
+   * upgrade, out of a wrapper's reach (and a servlet response cannot drop a header once set), so a
+   * handshake request gets none up front. Its rid still rides the event.
+   */
+  private static boolean websocketHandshake(HttpServletRequest req) {
+    return "websocket".equalsIgnoreCase(req.getHeader("upgrade"));
   }
 
   /**
