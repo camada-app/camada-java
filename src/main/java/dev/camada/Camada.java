@@ -282,6 +282,7 @@ public class Camada {
       return Passed.INERT;
     }
     long t0 = System.nanoTime();
+    long ts0 = nowMs(); // ts is the request start, the moment dur counts from
     snap.ensureFresh();
     String ip = ip(req);
 
@@ -384,6 +385,7 @@ public class Camada {
               return;
             }
             Map<String, Object> ev = event(req, rid, finalSid, newSession, ip);
+            ev.put("ts", ts0);
             ev.put("st", status);
             ev.put("dur", (System.nanoTime() - t0) / 1_000_000L);
             String route = ctx.route;

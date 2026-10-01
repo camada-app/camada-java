@@ -251,6 +251,26 @@ class EngineTest {
     }
 
     @Test
+    void stampsTsAtTheRequestStartSoTsPlusDurIsTheResponseEnd() {
+      Host h =
+          new Host(
+              req -> {
+                Thread.sleep(200);
+                return Reply.of(200, "ok".getBytes());
+              });
+      long start = System.currentTimeMillis();
+      h.call(new Call("GET", "/slow"));
+      long end = System.currentTimeMillis();
+      Map<String, Object> ev = h.events().get(0);
+      long ts = num(ev, "ts");
+      long dur = num(ev, "dur");
+      assertTrue(dur >= 200, "dur " + dur);
+      assertTrue(
+          ts >= start && ts < start + 100, "ts " + ts + " start " + start); // not one dur later
+      assertTrue(Math.abs(ts + dur - end) < 100, "ts+dur " + (ts + dur) + " end " + end);
+    }
+
+    @Test
     void reusesTheSessionCookieAndMarksHttpsSecure() {
       Host h = new Host();
       Reply r = h.call(new Call("GET", "/").header("cookie", "a=1; _sfp=sess-1; b=2").https(true));
