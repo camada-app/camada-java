@@ -187,6 +187,22 @@ class FilterTest {
   }
 
   @Test
+  void aWebsocketHandshakeGetsNoRidButItsEventDoes() throws Exception {
+    ServletDriver d = new ServletDriver(engine, req -> Reply.of(200, "unused".getBytes()));
+    MockHttpServletRequest req =
+        ServletDriver.request(
+            new Call("GET", "/ws").header("upgrade", "websocket").header("connection", "Upgrade"));
+    MockHttpServletResponse res = new MockHttpServletResponse();
+    FilterChain chain = (rq, rs) -> ((HttpServletResponse) rs).setStatus(101);
+    d.filter.doFilter(req, res, chain);
+    assertEquals(101, res.getStatus());
+    assertNull(res.getHeader("x-rid"));
+    Map<String, Object> ev = events().get(0);
+    assertEquals(101L, ((Number) ev.get("st")).longValue());
+    assertNotNull(ev.get("rid"));
+  }
+
+  @Test
   void sendErrorStatusReachesTheEvent() throws Exception {
     ServletDriver d =
         new ServletDriver(

@@ -164,8 +164,9 @@ run for, before the filter's first request, they are silent no-ops rather than a
    `POST /_cam/fp` (≤ 32 KB, relayed onto the event batch as a `sig: 1` row with the ip camada
    resolved). Both fall through to your app when the tenant switched the beacon off — with the
    body camada may already have read replayed to the app whole.
-6. Runs your app with `x-rid` and the `_sfp` session cookie on its response (stamped before the
-   chain runs, so your handlers see them too), and when the response is done — after the chain
+6. Runs your app with `x-rid` (the rid of the request's event row; never on a websocket handshake,
+   which the container answers 101) and the `_sfp` session cookie on its response (stamped before
+   the chain runs, so your handlers see them too), and when the response is done — after the chain
    returns, or in `AsyncListener.onComplete` when the app went async — ships one redacted event:
    method, host, path, scrubbed query, status, latency, header names/sizes/order, the auth scheme
    (never the credential), cookie count (never values), and the matched route pattern (`rt`) when
