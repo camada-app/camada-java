@@ -9,7 +9,7 @@ bug never 5xxes your app.
 
 Not on Maven Central yet. From your project's folder: clone it next to the project, build it into
 your local Maven repository, then add the dependency (as
-[`camada-java-example`](../camada-java-example) does):
+[`camada-java-example`](https://github.com/camada-app/camada-java-example) does):
 
 ```
 git clone https://github.com/camada-app/camada-java ../camada-java
@@ -71,7 +71,7 @@ public class CamadaListener implements ServletContextListener {
 }
 ```
 
-Set these as environment variables (camada onboarding prints the key; `npm run seed` in dev):
+Set these as environment variables (the key is printed once when you create a project in the app):
 export them in the shell that runs `./mvnw spring-boot:run` or the jar, or set them in your host's
 settings. camada reads only the process environment: `application.properties` and a `.env` file
 never reach it.
@@ -279,7 +279,7 @@ join, never its response. `CAMADA_DISABLED=1` bypasses everything.
 ## Not in this release
 
 - A Spring Boot starter / auto-configuration: the filter is plain `jakarta.servlet`, and
-  [`camada-java-example`](../camada-java-example) registers it by hand with a
+  [`camada-java-example`](https://github.com/camada-app/camada-java-example) registers it by hand with a
   `FilterRegistrationBean`.
 - Container-specific suites: the filter suite runs on Spring's mock servlet objects and the example
   on Tomcat; Jetty and Undertow take the same filter but are not exercised here.
@@ -297,6 +297,6 @@ overrides; `npm run build` there first, then `scripts/sync-beacon.sh` after a be
 Both fail by name when the checkout is missing rather than skipping. `mvn` may run on a newer JDK;
 `<release>17</release>` keeps the build honest.
 
-[`camada-java-example`](../camada-java-example) is the hand-test bench (Spring Boot on :3006), and
+[`camada-java-example`](https://github.com/camada-app/camada-java-example) is the hand-test bench (Spring Boot on :3006), and
 `node scripts/e2e-sdk-java.mjs` in `camada/edge-analyst` drives it against a seeded local analyst
 over real HTTP, cold first request included.
