@@ -27,10 +27,7 @@ public record Env(
     boolean serverless,
     TrustedProxy trustedProxy) {
 
-  /**
-   * PLACEHOLDER default, the same one {@code @camada/node} and camada-python carry — confirm the
-   * production ingest domain before any Maven Central publish.
-   */
+  /** Production ingest; {@code CAMADA_INGEST_URL} overrides it. */
   public static final String DEFAULT_INGEST_URL = "https://in.camada.app";
 
   /** Null (SDK stays inert, one log line) rather than throwing on bad config. */
