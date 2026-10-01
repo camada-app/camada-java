@@ -8,7 +8,7 @@ Spring Boot, Tomcat, Jetty and Undertow all take as is. Fails open by design: a 
 bug never 5xxes your app.
 
 Not yet on Maven Central — install it from a sibling checkout: `mvn -q install -DskipTests` here
-puts `dev.camada:camada:0.1.0` into your local repository (as
+puts `dev.camada:camada:0.1.1` into your local repository (as
 [`camada-java-example`](../camada-java-example) does); publishing is one decision with the npm
 packages (SDK-G01). Java 17 or newer; the only runtime dependency is the servlet API your
 container already provides.
@@ -19,7 +19,7 @@ container already provides.
 <dependency>
   <groupId>dev.camada</groupId>
   <artifactId>camada</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
 </dependency>
 ```
 

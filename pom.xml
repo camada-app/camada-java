@@ -9,7 +9,7 @@
        asserts the two agree (no resource filtering: one literal at runtime, no resource read). -->
   <groupId>dev.camada</groupId>
   <artifactId>camada</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
   <packaging>jar</packaging>
 
   <name>camada</name>
