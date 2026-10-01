@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 /**
@@ -62,7 +63,7 @@ public final class Parser {
     Long asn;
     String country;
     String tlsx;
-    String path = "/"; // already query-stripped
+    String[] paths = {"/", "/", "/"}; // [raw, lit, full]: see Paths
     String ua;
     Function<String, String>
         header; // called with an already lower-cased name; null where the tap cannot read headers
@@ -114,6 +115,24 @@ public final class Parser {
     return new HashSet<>(dev.camada.Config.strings(v));
   }
 
+  /** Exact path entries, canonicalised once at load (contracts §D3 "Path matching"). */
+  private static Set<String> exactPaths(Object v) {
+    Set<String> out = new HashSet<>();
+    for (String p : dev.camada.Config.strings(v)) {
+      out.add(Paths.canonPath(p));
+    }
+    return out;
+  }
+
+  /** Prefix entries -> their canonical directory keys ('/' stays '/', which covers everything). */
+  private static Set<String> prefixPaths(Object v) {
+    Set<String> out = new HashSet<>();
+    for (String p : dev.camada.Config.strings(v)) {
+      out.add(Paths.dirKey(p));
+    }
+    return out;
+  }
+
   private static Set<Long> longs(Object v) {
     Set<Long> out = new HashSet<>();
     if (v instanceof List<?> l) {
@@ -135,8 +154,8 @@ public final class Parser {
   private static RangeSet rangeSet(IntBuffer r4, IntBuffer r6, Map<String, Object> m) {
     Set<Long> asn = m == null ? Set.of() : longs(m.get("asn"));
     Set<String> country = m == null ? Set.of() : strings(m.get("country"));
-    Set<String> exact = m == null ? Set.of() : strings(m.get("pathsExact"));
-    Set<String> prefix = m == null ? Set.of() : strings(m.get("pathsPrefix"));
+    Set<String> exact = m == null ? Set.of() : exactPaths(m.get("pathsExact"));
+    Set<String> prefix = m == null ? Set.of() : prefixPaths(m.get("pathsPrefix"));
     boolean empty =
         r4.limit() == 0
             && r6.limit() == 0
@@ -216,8 +235,13 @@ public final class Parser {
    * the default (non-UNICODE_CHARACTER_CLASS) mode keeps \d \w \b as JS reads them.
    */
   public static Pattern compileRegex(String pattern) {
+    return compileRegex(pattern, 0);
+  }
+
+  /** As {@link #compileRegex(String)} with flags: a path regex runs CASE_INSENSITIVE (§D3). */
+  public static Pattern compileRegex(String pattern, int flags) {
     try {
-      return Pattern.compile(jsToJava(pattern));
+      return Pattern.compile(jsToJava(pattern), flags);
     } catch (RuntimeException | StackOverflowError e) {
       return null;
     }
@@ -311,8 +335,6 @@ public final class Parser {
         return r.country == null || r.country.isEmpty() ? null : r.country;
       case "tlsx":
         return r.tlsx == null || r.tlsx.isEmpty() ? null : r.tlsx;
-      case "path":
-        return r.path;
       case "ua":
         return r.ua == null || r.ua.isEmpty() ? null : r.ua;
       default:
@@ -327,9 +349,13 @@ public final class Parser {
    * One condition -> a predicate. {@code sets} yields this rule's (v4, v6) section pair per ip
    * condition, in condition order, so an ip condition consumes the next one.
    */
-  private static RuleCond compileCond(Map<String, Object> c, List<Pair> sets) {
+  private static RuleCond compileCond(Map<String, Object> c, List<Pair> sets, boolean deny) {
     String f = String.valueOf(c.getOrDefault("f", ""));
     String op = String.valueOf(c.getOrDefault("op", ""));
+    if (f.equals("path")) { // every path op reads the canonical forms (see Paths), never fieldValue
+      Predicate<String> pred = pathPred(op, values(c.get("v")));
+      return r -> Paths.hit(pred, r.paths, deny);
+    }
     boolean negate = op.equals("is_not") || op.equals("not_in");
     // A header condition reads the request through the caller's getter. The name is lower-cased
     // once, here; a tap that cannot read headers (no getter) and a header the request does not
@@ -369,15 +395,7 @@ public final class Parser {
         return negate != hit;
       };
     }
-    Object raw = c.get("v");
-    List<String> values = new ArrayList<>();
-    if (raw instanceof List<?> l) {
-      for (Object x : l) {
-        values.add(jsString(x));
-      }
-    } else {
-      values.add(jsString(raw));
-    }
+    List<String> values = values(c.get("v"));
     String first = values.isEmpty() ? "" : values.get(0);
     switch (op) {
       case "matches":
@@ -406,6 +424,36 @@ public final class Parser {
           return negate != members.contains(v);
         };
     }
+  }
+
+  private static List<String> values(Object raw) {
+    List<String> values = new ArrayList<>();
+    if (raw instanceof List<?> l) {
+      for (Object x : l) {
+        values.add(jsString(x));
+      }
+    } else {
+      values.add(jsString(raw));
+    }
+    return values;
+  }
+
+  /** One path condition -> a predicate over a single path form (canonical values, §D3). */
+  private static Predicate<String> pathPred(String op, List<String> values) {
+    String first = values.isEmpty() ? "" : values.get(0);
+    if (op.equals("matches")) {
+      Pattern rx = compileRegex(first, Pattern.CASE_INSENSITIVE);
+      return p -> rx != null && find(rx, p);
+    }
+    if (op.equals("starts_with")) {
+      String key = first.endsWith("/") ? Paths.dirKey(first) : Paths.canonPath(first);
+      return p -> Paths.dir(p).startsWith(key);
+    }
+    Set<String> set = new HashSet<>();
+    for (String v : values) {
+      set.add(Paths.canonPath(v));
+    }
+    return set::contains;
   }
 
   /** {@code str(x)} as JS would spell a condition value: 14061 stays "14061", never "14061.0". */
@@ -461,7 +509,7 @@ public final class Parser {
             if (cm == null) {
               throw new IllegalArgumentException("malformed condition");
             }
-            conds.add(compileCond(cm, sets));
+            conds.add(compileCond(cm, sets, !action.equals("skip")));
           }
         }
       } catch (RuntimeException e) {
@@ -515,7 +563,7 @@ public final class Parser {
     IntBuffer s6 = sec.getOrDefault(5, EMPTY);
     List<Pattern> regex = new ArrayList<>();
     for (String p : Config.strings(meta.get("pathsRegex"))) {
-      Pattern rx = compileRegex(p);
+      Pattern rx = compileRegex(p, Pattern.CASE_INSENSITIVE);
       if (rx != null) {
         regex.add(rx);
       }
@@ -535,8 +583,8 @@ public final class Parser {
         sec.getOrDefault(9, EMPTY),
         strings(meta.get("country")),
         strings(meta.get("tls")),
-        strings(meta.get("pathsExact")),
-        strings(meta.get("pathsPrefix")),
+        exactPaths(meta.get("pathsExact")),
+        prefixPaths(meta.get("pathsPrefix")),
         List.copyOf(regex),
         rangeSet(
             sec.getOrDefault(10, EMPTY),

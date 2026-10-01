@@ -7,6 +7,7 @@ import dev.camada.snapshot.Parser.RuleCond;
 import dev.camada.snapshot.Parser.RuleRequest;
 import dev.camada.snapshot.Parser.Snapshot;
 import java.nio.IntBuffer;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Pattern;
@@ -103,14 +104,16 @@ public final class Matcher {
     return q < 0 ? p : p.substring(0, q);
   }
 
-  /** Walks every '/'-terminated ancestor of {@code path}, the way the block side does. */
-  private static boolean prefixHit(Set<String> prefixes, String path) {
-    int i = path.indexOf('/', 1);
-    while (i != -1) {
-      if (prefixes.contains(path.substring(0, i + 1))) {
+  /** Exact, prefix (canonical keys) or regex membership of one path form. */
+  private static boolean pathIn(
+      Set<String> exact, Set<String> prefix, List<Pattern> regex, String p) {
+    if (exact.contains(p) || (!prefix.isEmpty() && Paths.prefixed(prefix, p))) {
+      return true;
+    }
+    for (Pattern rx : regex) {
+      if (Parser.find(rx, p)) {
         return true;
       }
-      i = path.indexOf('/', i + 1);
     }
     return false;
   }
@@ -214,24 +217,13 @@ public final class Matcher {
     return false;
   }
 
-  private boolean blockedPath(String path) {
+  private boolean blockedPath(String[] forms) {
     Snapshot s = snap;
-    if (s.pathsExact().contains(path)) {
-      return true;
-    }
-    if (!s.pathsPrefix().isEmpty() && prefixHit(s.pathsPrefix(), path)) {
-      return true;
-    }
-    for (Pattern rx : s.pathsRegex()) {
-      if (Parser.find(rx, path)) {
-        return true;
-      }
-    }
-    return false;
+    return Paths.hit(p -> pathIn(s.pathsExact(), s.pathsPrefix(), s.pathsRegex(), p), forms, true);
   }
 
   /** The block side: v3 sections plus the top-level meta. */
-  private String blockSide(MatchInput i, long n4, int[] w) {
+  private String blockSide(MatchInput i, long n4, int[] w, String[] forms) {
     Snapshot s = snap;
     if (n4 >= 0 && blocked4((int) n4)) {
       return "ip4";
@@ -249,14 +241,15 @@ public final class Matcher {
       return "tls";
     }
     if ((!s.pathsExact().isEmpty() || !s.pathsPrefix().isEmpty() || !s.pathsRegex().isEmpty())
-        && blockedPath(cleanPath(i.path()))) {
+        && blockedPath(forms)) {
       return "path";
     }
     return null;
   }
 
   /** A v4 side list (allow or challenge). No tls axis: §A3's side meta has no tls key. */
-  private static String side(RangeSet st, MatchInput i, long n4, int[] w) {
+  private static String side(
+      RangeSet st, MatchInput i, long n4, int[] w, String[] forms, boolean deny) {
     if (st.empty()) {
       return null; // the common v3 snapshot
     }
@@ -272,14 +265,9 @@ public final class Matcher {
     if (i.country() != null && !i.country().isEmpty() && st.country().contains(i.country())) {
       return "country";
     }
-    if (!st.pathsExact().isEmpty() || !st.pathsPrefix().isEmpty()) {
-      String p = cleanPath(i.path());
-      if (st.pathsExact().contains(p)) {
-        return "path";
-      }
-      if (!st.pathsPrefix().isEmpty() && prefixHit(st.pathsPrefix(), p)) {
-        return "path";
-      }
+    if ((!st.pathsExact().isEmpty() || !st.pathsPrefix().isEmpty())
+        && Paths.hit(p -> pathIn(st.pathsExact(), st.pathsPrefix(), List.of(), p), forms, deny)) {
+      return "path";
     }
     return null;
   }
@@ -296,6 +284,7 @@ public final class Matcher {
         w = IpParse.parseIp6(ip);
       }
     }
+    String[] forms = Paths.forms(i.path()); // [raw, lit, full]: contracts §D3 "Path matching"
     if (!s.rules().isEmpty()) {
       RuleRequest r = new RuleRequest();
       r.n4 = n4;
@@ -303,7 +292,7 @@ public final class Matcher {
       r.asn = i.asn();
       r.country = i.country();
       r.tlsx = i.tlsx();
-      r.path = cleanPath(i.path());
+      r.paths = forms;
       r.ua = i.ua();
       r.header = i.header();
       for (CompiledRule rule : s.rules()) { // the order IS the precedence (§A4): first match wins
@@ -319,15 +308,16 @@ public final class Matcher {
         }
       }
     }
-    String reason = side(s.allow(), i, n4, w);
+    // an exemption: every canonical spelling must agree
+    String reason = side(s.allow(), i, n4, w, forms, false);
     if (reason != null) {
       return MatchResult.of(false, false, true, reason, s.version());
     }
-    reason = blockSide(i, n4, w);
+    reason = blockSide(i, n4, w, forms);
     if (reason != null) {
       return MatchResult.of(true, false, false, reason, s.version());
     }
-    reason = side(s.challenge(), i, n4, w);
+    reason = side(s.challenge(), i, n4, w, forms, true);
     if (reason != null) {
       return MatchResult.of(false, true, false, reason, s.version());
     }
