@@ -7,15 +7,22 @@ request path. One artifact, `dev.camada:camada`, with a plain `jakarta.servlet.F
 Spring Boot, Tomcat, Jetty and Undertow all take as is. Fails open by design: a camada outage or
 bug never 5xxes your app.
 
-Not yet on Maven Central — install it from a sibling checkout: `mvn -q install -DskipTests` here
-puts `dev.camada:camada:0.1.1` into your local repository (as
-[`camada-java-example`](../camada-java-example) does); publishing is one decision with the npm
-packages (SDK-G01). Java 17 or newer; the only runtime dependency is the servlet API your
-container already provides.
+Not on Maven Central yet. From your project's folder: clone it next to the project, build it into
+your local Maven repository, then add the dependency (as
+[`camada-java-example`](../camada-java-example) does):
+
+```
+git clone https://github.com/camada-app/camada-java ../camada-java
+mvn -q -f ../camada-java install -DskipTests
+```
+
+Publishing is one decision with the npm packages (SDK-G01). Java 17 or newer; the only runtime
+dependency is the servlet API your container already provides.
 
 ## Quickstart
 
 ```xml
+<!-- pom.xml -->
 <dependency>
   <groupId>dev.camada</groupId>
   <artifactId>camada</artifactId>
@@ -64,11 +71,14 @@ public class CamadaListener implements ServletContextListener {
 }
 ```
 
-Env (printed by camada onboarding / `npm run seed` in dev):
+Set these as environment variables (camada onboarding prints the key; `npm run seed` in dev):
+export them in the shell that runs `./mvnw spring-boot:run` or the jar, or set them in your host's
+settings. camada reads only the process environment: `application.properties` and a `.env` file
+never reach it.
 
 ```
-CAMADA_KEY=<ingest_token>.<snap_token>
-CAMADA_INGEST_URL=http://localhost:8787        # dev only; defaults to production ingest
+export CAMADA_KEY=<ingest_token>.<snap_token>
+export CAMADA_INGEST_URL=http://localhost:8787   # dev only; defaults to production ingest
 ```
 
 The filter shares one lazy engine (`Camada.getDefault()`) built from the environment on the first
