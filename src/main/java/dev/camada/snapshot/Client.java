@@ -221,7 +221,17 @@ public final class Client {
     if (res.status() != 200 && res.status() != 204 && res.status() != 304) {
       return; // 401/5xx/network: keep what we have
     }
-    loadedAtNanos = System.nanoTime();
+    // loadedAt is stamped last (even when the body turns out corrupt): "not cold" is what warmUp()
+    // and the request path read as "rules in place", so it must not be visible before the matcher
+    // and config are.
+    try {
+      publish(res);
+    } finally {
+      loadedAtNanos = System.nanoTime();
+    }
+  }
+
+  private void publish(Response res) {
     readConfig(res.headers().get("x-camada-config"));
     if (res.status() == 304) {
       return;
