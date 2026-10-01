@@ -24,16 +24,44 @@ container already provides.
 ```
 
 ```java
-// Spring Boot: register the filter first, so camada answers before routing
-@Bean
-FilterRegistrationBean<CamadaFilter> camadaFilter() {
-  var reg = new FilterRegistrationBean<>(new CamadaFilter());
-  reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
-  return reg;
-}
+// CamadaConfig.java, beside your @SpringBootApplication class
+package com.example.demo;   // your application's package
 
-// any servlet container: web.xml, or programmatic registration at the front of the chain
-context.addFilter("camada", new CamadaFilter()).addMappingForUrlPatterns(null, false, "/*");
+import dev.camada.servlet.CamadaFilter;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+
+@Configuration
+class CamadaConfig {
+  @Bean
+  FilterRegistrationBean<CamadaFilter> camadaFilter() {
+    var reg = new FilterRegistrationBean<>(new CamadaFilter());
+    reg.setOrder(Ordered.HIGHEST_PRECEDENCE);   // first, so camada answers before routing
+    return reg;
+  }
+}
+```
+
+Any other servlet container:
+
+```java
+// CamadaListener.java: any servlet container (or declare the filter first in web.xml)
+import dev.camada.servlet.CamadaFilter;
+import jakarta.servlet.ServletContextEvent;
+import jakarta.servlet.ServletContextListener;
+import jakarta.servlet.annotation.WebListener;
+
+@WebListener
+public class CamadaListener implements ServletContextListener {
+  @Override
+  public void contextInitialized(ServletContextEvent event) {
+    event.getServletContext()
+        .addFilter("camada", new CamadaFilter())
+        .addMappingForUrlPatterns(null, false, "/*");   // false: ahead of the filters web.xml declares
+  }
+}
 ```
 
 Env (printed by camada onboarding / `npm run seed` in dev):
@@ -52,10 +80,20 @@ poll — `snapshot().refresh()` alone is not it, the boot poll already holds the
 lock:
 
 ```java
-// an ApplicationRunner, a ServletContextListener, or the end of main()
-Camada engine = Camada.getDefault();   // builds the engine; the boot poll is already running on its thread
-engine.warmUp(5000);                   // bounded: an unreachable analyst leaves it cold, and the app still fails open
+// CamadaConfig.java: two more imports…
+import dev.camada.Camada;
+import org.springframework.boot.ApplicationRunner;
+
+// …and one more @Bean in the class, run once the app has started
+@Bean
+ApplicationRunner camadaWarmUp() {
+  // builds the engine (its boot poll is already running on its thread), then waits for that poll:
+  // bounded, so an unreachable analyst leaves it cold, and the app still fails open
+  return args -> Camada.getDefault().warmUp(5000);
+}
 ```
+
+(Elsewhere — a `ServletContextListener`, the end of `main()` — it is the same call: `Camada.getDefault().warmUp(5000);`.)
 
 `warmUp(ms)` is bounded and never throws: false when the engine is inert, killed, or the analyst
 did not answer in time. When the filter was handed `Options`, warm through `camadaFilter.engine()`
@@ -66,9 +104,24 @@ reads its own config builds the engine itself and hands it in — or hands the f
 it should build the default engine with:
 
 ```java
-Camada engine = new Camada(new Options().env(Map.of("CAMADA_KEY", myKey, "CAMADA_INGEST_URL", myIngest)));
-new CamadaFilter(engine);                                   // this engine, not the default
-new CamadaFilter(new Options().env(myEnv));                 // the default engine, built with these options on the first request
+// CamadaConfig.java, for an app that reads its own configuration: these imports too…
+import dev.camada.Camada;
+import dev.camada.Options;
+import java.util.Map;
+import org.springframework.beans.factory.annotation.Value;
+
+// …and this filter bean in place of the one above
+@Bean
+FilterRegistrationBean<CamadaFilter> camadaFilter(
+    @Value("${camada.key}") String key, @Value("${camada.ingest-url}") String ingest) {
+  Camada engine = new Camada(new Options()
+      .env(Map.of("CAMADA_KEY", key, "CAMADA_INGEST_URL", ingest))
+      .challengePath("/api/__camada/challenge"));
+  var reg = new FilterRegistrationBean<>(new CamadaFilter(engine));   // this engine, not the default
+  // or new CamadaFilter(new Options().env(...)): the default engine, built with these options on the first request
+  reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
+  return reg;
+}
 ```
 
 The default is built once, by the first caller, with that caller's options. The static helpers
@@ -135,7 +188,21 @@ request; set at boot, no threads start at all).
 ## The first-party beacon
 
 ```java
-String head = "<html><head>" + Camada.scriptTag(request) + "</head>…";   // request: the HttpServletRequest
+// PageController.java, beside CamadaConfig.java: the tag goes in the <head> of the pages you render
+package com.example.demo;   // your application's package
+
+import dev.camada.Camada;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+class PageController {
+  @GetMapping(value = "/", produces = "text/html")
+  String home(HttpServletRequest request) {
+    return "<html><head>" + Camada.scriptTag(request) + "</head><body>…</body></html>";
+  }
+}
 ```
 
 The tag is `<script src="/_cam/b.js?r=<rid>" async>`, so the beacon joins the page view that
@@ -145,6 +212,7 @@ derives the post path from its own URL, so the two must share a directory.
 ## App-context events
 
 ```java
+// in a PageController handler, once your own sign-in check fails (email: the account it was for)
 Camada.track(request, "login_failed", email);
 ```
 
