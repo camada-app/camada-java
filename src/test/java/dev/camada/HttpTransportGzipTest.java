@@ -20,4 +20,18 @@ class HttpTransportGzipTest {
     assertNull(r.headers().get("retry-after"));
     assertEquals(0, r.body().length);
   }
+
+  /**
+   * A 304 carries Content-Encoding: gzip but no body: nothing to decode, status and headers stay.
+   */
+  @Test
+  void emptyBodyIsNeverDecoded() {
+    Map<String, String> h = new HashMap<>();
+    h.put("content-encoding", "gzip");
+    h.put("retry-after", "30");
+    Response r = HttpTransport.response(304, h, new byte[0]);
+    assertEquals(304, r.status());
+    assertEquals("30", r.headers().get("retry-after"));
+    assertEquals(0, r.body().length);
+  }
 }

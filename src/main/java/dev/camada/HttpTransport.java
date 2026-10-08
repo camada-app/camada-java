@@ -60,7 +60,7 @@ public final class HttpTransport implements Transport {
   }
 
   static Response response(int status, Map<String, String> lower, byte[] body) {
-    if ("gzip".equalsIgnoreCase(lower.getOrDefault("content-encoding", ""))) {
+    if (body.length > 0 && "gzip".equalsIgnoreCase(lower.getOrDefault("content-encoding", ""))) {
       try (GZIPInputStream gz = new GZIPInputStream(new ByteArrayInputStream(body))) {
         body = gz.readAllBytes();
       } catch (IOException | RuntimeException e) {
