@@ -231,7 +231,7 @@ public final class Client {
    * lock, so the task re-checks staleness — the second finds the first's load and does nothing, as
    * a manual refresh just before a timer tick makes that tick a no-op in the reference.
    */
-  private void refreshIfDue() {
+  void refreshIfDue() {
     if (due()) {
       refresh();
     }
@@ -273,6 +273,7 @@ public final class Client {
     try {
       res = transport.send(new Request("GET", url, headers, null, timeoutMs));
     } catch (RuntimeException err) { // a transport that throws is a poll nobody answered
+      Guarded.logRateLimited(err);
       res = new Response(0, Map.of(), new byte[0]);
     }
     OptionalDouble delay = nextPollDelay(res.status(), res.headers().get("retry-after"), refreshS);
