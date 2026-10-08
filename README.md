@@ -274,7 +274,9 @@ it does at the edge.
 Every entry point runs inside the fail-open envelope: a dead ingest drops telemetry (logged at
 most once a minute, on the `camada` `java.util.logging` logger, message only, never a stack
 trace), a corrupt snapshot keeps the previous one, a bug in the package costs the request its
-join, never its response. `CAMADA_DISABLED=1` bypasses everything.
+join, never its response. `CAMADA_DISABLED=1` bypasses everything. When a snapshot poll gets no
+usable answer (401, 5xx, a network failure), the blocks already loaded are kept and the next poll
+waits `max(retry-after, 5 s)`, capped at the refresh interval.
 
 ## Not in this release
 

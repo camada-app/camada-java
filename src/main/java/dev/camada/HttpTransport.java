@@ -60,11 +60,14 @@ public final class HttpTransport implements Transport {
   }
 
   static Response response(int status, Map<String, String> lower, byte[] body) {
-    if ("gzip".equalsIgnoreCase(lower.getOrDefault("content-encoding", ""))) {
+    if (body.length > 0 && "gzip".equalsIgnoreCase(lower.getOrDefault("content-encoding", ""))) {
       try (GZIPInputStream gz = new GZIPInputStream(new ByteArrayInputStream(body))) {
         body = gz.readAllBytes();
       } catch (IOException | RuntimeException e) {
-        return new Response(0, lower, new byte[0]); // a body we cannot read is no answer at all
+        return new Response(
+            0,
+            Map.of(),
+            new byte[0]); // no answer at all: its headers (retry-after) are not passed on
       }
       lower.remove("content-encoding");
     }
