@@ -16,12 +16,14 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.OptionalDouble;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.LongSupplier;
 
 /**
  * SnapshotClient: the single-tenant port of the edge collector's snapshot lifecycle over the GET
@@ -58,6 +60,13 @@ public final class Client {
   private volatile RemoteConfig config;
   private volatile String etag;
   private volatile long loadedAtNanos; // 0 = never
+
+  /** Failure gate: no self-initiated poll before this reading of {@link #nanos}; 0 = open. */
+  private volatile long notBeforeNanos;
+
+  /** Test seam: the monotonic clock behind loadedAt and the failure gate. */
+  LongSupplier nanos = System::nanoTime;
+
   private final ReentrantLock loading = new ReentrantLock();
   private final ScheduledExecutorService exec =
       Executors.newSingleThreadScheduledExecutor(
@@ -144,7 +153,7 @@ public final class Client {
     if (stopped) {
       return;
     }
-    refreshIfStale();
+    refreshIfDue();
     schedule();
   }
 
@@ -159,16 +168,59 @@ public final class Client {
    */
   public boolean stale() {
     long at = loadedAtNanos;
-    return at == 0 || (System.nanoTime() - at) > (long) (refreshS * 0.9 * 1_000_000_000L);
+    return at == 0 || (nanos.getAsLong() - at) > (long) (refreshS * 0.9 * 1_000_000_000L);
+  }
+
+  /** Stale and past the failure gate: what every self-initiated poll checks. */
+  boolean due() {
+    long nb = notBeforeNanos;
+    return stale() && (nb == 0 || nanos.getAsLong() - nb >= 0);
+  }
+
+  /**
+   * Seconds to wait after a poll that was not answered 200/204/304 (status 0 = no answer); empty
+   * when the answer governs. min(max(retry-after, 5), refresh): the cap wins over the floor.
+   */
+  static OptionalDouble nextPollDelay(int status, String retryAfter, double refreshS) {
+    if (status == 200 || status == 204 || status == 304) {
+      return OptionalDouble.empty();
+    }
+    return OptionalDouble.of(
+        Math.min(Math.max(parseRetryAfter(retryAfter), 5), Math.max(refreshS, 0)));
+  }
+
+  /** Delta-seconds only (1+ ASCII digits after trimming SP/HTAB); anything else reads as 0. */
+  private static double parseRetryAfter(String v) {
+    if (v == null) {
+      return 0;
+    }
+    int a = 0;
+    int b = v.length();
+    while (a < b && (v.charAt(a) == ' ' || v.charAt(a) == '\t')) {
+      a++;
+    }
+    while (b > a && (v.charAt(b - 1) == ' ' || v.charAt(b - 1) == '\t')) {
+      b--;
+    }
+    if (a == b) {
+      return 0;
+    }
+    for (int i = a; i < b; i++) {
+      char ch = v.charAt(i);
+      if (ch < '0' || ch > '9') {
+        return 0;
+      }
+    }
+    return b - a > 9 ? 1e9 : Long.parseLong(v.substring(a, b));
   }
 
   /** Kicks a refresh when stale; never blocks the request path, never throws. */
   public void ensureFresh() {
-    if (stopped || !stale() || loading.isLocked()) {
+    if (stopped || !due() || loading.isLocked()) {
       return;
     }
     try {
-      exec.execute(this::refreshIfStale);
+      exec.execute(this::refreshIfDue);
     } catch (RejectedExecutionException e) {
       // stopped: nothing to refresh
     }
@@ -179,8 +231,8 @@ public final class Client {
    * lock, so the task re-checks staleness — the second finds the first's load and does nothing, as
    * a manual refresh just before a timer tick makes that tick a no-op in the reference.
    */
-  private void refreshIfStale() {
-    if (stale()) {
+  private void refreshIfDue() {
+    if (due()) {
       refresh();
     }
   }
@@ -217,17 +269,28 @@ public final class Client {
       // a tenant without that container is answered with the next one down
       headers.put("x-camada-snapshot", String.valueOf(snapshotVersion));
     }
-    Response res = transport.send(new Request("GET", url, headers, null, timeoutMs));
-    if (res.status() != 200 && res.status() != 204 && res.status() != 304) {
-      return; // 401/5xx/network: keep what we have
+    Response res;
+    try {
+      res = transport.send(new Request("GET", url, headers, null, timeoutMs));
+    } catch (RuntimeException err) { // a transport that throws is a poll nobody answered
+      res = new Response(0, Map.of(), new byte[0]);
     }
+    OptionalDouble delay = nextPollDelay(res.status(), res.headers().get("retry-after"), refreshS);
+    if (delay.isPresent()) {
+      // 401/5xx/network: keep what we have (blocks, etag, config, loadedAt) and hold the next
+      // self-initiated poll back. Written before the single-flight lock is released.
+      long nb = nanos.getAsLong() + (long) (delay.getAsDouble() * 1_000_000_000L);
+      notBeforeNanos = nb == 0 ? 1 : nb;
+      return;
+    }
+    notBeforeNanos = 0;
     // loadedAt is stamped last (even when the body turns out corrupt): "not cold" is what warmUp()
     // and the request path read as "rules in place", so it must not be visible before the matcher
     // and config are.
     try {
       publish(res);
     } finally {
-      loadedAtNanos = System.nanoTime();
+      loadedAtNanos = nanos.getAsLong();
     }
   }
 
