@@ -12,6 +12,7 @@ import dev.camada.snapshot.Matcher.MatchInput;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 
@@ -90,6 +91,103 @@ class BackoffTest {
         assertEquals(after.get("cold"), "cold".equals(v.reason()), where + " cold");
         assertEquals(after.get("blocked"), v.block(), where + " blocked");
       }
+    }
+  }
+
+  private static final class Counting {
+    final AtomicInteger snapshotRequests = new AtomicInteger();
+    volatile boolean fail;
+    final FakeAnalyst analyst = new FakeAnalyst();
+
+    Response send(dev.camada.Transport.Request req) {
+      if (!fail) {
+        return analyst.send(req);
+      }
+      snapshotRequests.incrementAndGet();
+      return new Response(503, Map.of("retry-after", "30"), new byte[0]);
+    }
+  }
+
+  private static void quiesce() throws InterruptedException {
+    Thread.sleep(200); // the single executor thread drains what the request path queued
+  }
+
+  /** Request path under a closed gate: warm, stale, 503 retry-after 30 -> one request per 30 s. */
+  @Test
+  void requestPathAndTickHonourTheGate() throws Exception {
+    Counting t = new Counting();
+    AtomicLong clock = new AtomicLong(1_000_000_000_000L);
+    Client c =
+        new Client(ClientTest.URL, "snap-test")
+            .transport(t::send)
+            .refreshS(30)
+            .mode(Client.Mode.LAZY);
+    c.nanos = clock::get;
+    c.refresh(); // warm with a 200
+    clock.addAndGet(28_000_000_000L); // stale, gate open
+    t.fail = true;
+    c.ensureFresh();
+    long deadline = System.nanoTime() + 5_000_000_000L;
+    while (c.due() && System.nanoTime() < deadline) {
+      Thread.sleep(5);
+    }
+    assertEquals(1, t.snapshotRequests.get());
+    for (int i = 0; i < 20; i++) {
+      c.ensureFresh();
+    }
+    c.refreshIfDue(); // the timer tick
+    quiesce();
+    assertEquals(1, t.snapshotRequests.get(), "gated: stale but not due");
+    clock.addAndGet(30_000_000_000L);
+    c.ensureFresh();
+    deadline = System.nanoTime() + 5_000_000_000L;
+    while (t.snapshotRequests.get() < 2 && System.nanoTime() < deadline) {
+      Thread.sleep(5);
+    }
+    quiesce();
+    assertEquals(2, t.snapshotRequests.get(), "gate elapsed: one more poll");
+  }
+
+  /** A transport that throws is a poll nobody answered (gated as status 0) and is still logged. */
+  @Test
+  void throwingTransportIsLoggedAndGated() throws Exception {
+    java.util.logging.Logger log = java.util.logging.Logger.getLogger("camada");
+    java.util.List<String> lines = new java.util.concurrent.CopyOnWriteArrayList<>();
+    java.util.logging.Handler h =
+        new java.util.logging.Handler() {
+          @Override
+          public void publish(java.util.logging.LogRecord r) {
+            lines.add(r.getMessage());
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    java.lang.reflect.Field f = dev.camada.Guarded.class.getDeclaredField("lastLogNanos");
+    f.setAccessible(true);
+    f.setLong(null, Long.MIN_VALUE); // forget any line already logged this minute
+    log.addHandler(h);
+    try {
+      AtomicLong clock = new AtomicLong(1_000_000_000_000L);
+      Client c =
+          new Client(ClientTest.URL, "snap-test")
+              .transport(
+                  req -> {
+                    throw new IllegalStateException("boom");
+                  })
+              .refreshS(30)
+              .mode(Client.Mode.LAZY);
+      c.nanos = clock::get;
+      c.refresh();
+      assertTrue(lines.stream().anyMatch(l -> l.contains("boom")), lines.toString());
+      assertFalse(c.due(), "gated as status 0");
+      clock.addAndGet(5_000_000_000L);
+      assertTrue(c.due(), "5 s floor elapsed");
+    } finally {
+      log.removeHandler(h);
     }
   }
 }
