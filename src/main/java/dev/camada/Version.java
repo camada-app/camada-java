@@ -7,7 +7,7 @@ package dev.camada;
  * asserts the two agree. Plain X.Y.Z only: the analyst's SDK_RE drops anything else.
  */
 public final class Version {
-  public static final String VERSION = "0.1.2";
+  public static final String VERSION = "0.1.3";
   public static final String SDK_ID = "@camada/java/" + VERSION;
 
   private Version() {}
