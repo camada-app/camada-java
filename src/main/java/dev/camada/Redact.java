@@ -18,25 +18,121 @@ import javax.crypto.spec.SecretKeySpec;
 public final class Redact {
   private Redact() {}
 
+  // Exact patterns of C6 v3. NAME_RE runs on ASCII-lowercased text (nameHit), so no case folding at
+  // all; hex/b64 use matches() (whole string, \z semantics: no match before a trailing newline);
+  // jwt is a prefix test (lookingAt). Classes are explicit ASCII.
   private static final Pattern NAME_RE =
       Pattern.compile(
-          "(pass(word)?|tok(en)?|secret|key|api[-_]?key|auth|sess(ion)?|sig(nature)?|code|jwt|bearer|credential)",
-          Pattern.CASE_INSENSITIVE);
-  private static final Pattern JWT_RE =
-      Pattern.compile("^eyJ[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9_-]{6,}");
-  private static final Pattern HEX_RE =
-      Pattern.compile("^[a-f0-9]{32,}$", Pattern.CASE_INSENSITIVE);
-  private static final Pattern B64_RE = Pattern.compile("^[A-Za-z0-9+/_-]{40,}={0,2}$");
+          "(pass(word)?|tok(en)?|secret|key|api[-_]?key|auth|sess(ion)?|sig(nature)?|code|jwt|bearer|credential)");
+  private static final Pattern JWT_RE = Pattern.compile("eyJ[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9_-]{6,}");
+  private static final Pattern HEX_RE = Pattern.compile("[a-fA-F0-9]{32,}");
+  private static final Pattern B64_RE = Pattern.compile("[A-Za-z0-9+/_-]{40,}={0,2}");
 
   /** Additions only, never narrowing. */
   public static final List<String> REDACT_ALLOWLIST =
       List.of("plan", "role", "locale", "ab_variant");
 
   private static boolean suspectValue(String v) {
-    return JWT_RE.matcher(v).find() || HEX_RE.matcher(v).find() || B64_RE.matcher(v).find();
+    return JWT_RE.matcher(v).lookingAt()
+        || HEX_RE.matcher(v).matches()
+        || B64_RE.matcher(v).matches();
   }
 
-  /** Replaces credential-looking query values with ~r, preserving structure and order. */
+  /** Lowercase A-Z only, then a substring search: ASCII-only case folding by construction. */
+  private static boolean nameHit(String n) {
+    char[] c = n.toCharArray();
+    for (int i = 0; i < c.length; i++) {
+      if (c[i] >= 'A' && c[i] <= 'Z') {
+        c[i] = (char) (c[i] + 32);
+      }
+    }
+    return NAME_RE.matcher(new String(c)).find();
+  }
+
+  private static int hexVal(char c) {
+    if (c >= '0' && c <= '9') {
+      return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+      return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+      return c - 'A' + 10;
+    }
+    return -1; // ASCII hex only: Character.digit would accept other scripts' digits
+  }
+
+  private static boolean hasEscape(String s) {
+    for (int i = s.indexOf('%'); i >= 0 && i + 2 < s.length(); i = s.indexOf('%', i + 1)) {
+      if (hexVal(s.charAt(i + 1)) >= 0 && hexVal(s.charAt(i + 2)) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Percent-decoding that never throws: each {@code %HH} (ASCII hex) becomes the char with that
+   * byte's value (Latin-1), any other {@code %} stays, {@code +} stays. Up to 4 passes; text still
+   * holding a {@code %HH} after them is null (scrubbed). Never URLDecoder. Only ever used to TEST.
+   */
+  static String decode(String s) {
+    for (int pass = 0; pass < 4 && hasEscape(s); pass++) {
+      StringBuilder b = new StringBuilder(s.length());
+      int i = 0;
+      while (i < s.length()) {
+        char c = s.charAt(i);
+        int hi;
+        int lo;
+        if (c == '%'
+            && i + 2 < s.length()
+            && (hi = hexVal(s.charAt(i + 1))) >= 0
+            && (lo = hexVal(s.charAt(i + 2))) >= 0) {
+          b.append((char) (hi * 16 + lo));
+          i += 3;
+        } else {
+          b.append(c);
+          i++;
+        }
+      }
+      s = b.toString();
+    }
+    return hasEscape(s) ? null : s;
+  }
+
+  /** One `name=value` or bare segment of a decoded nested value: a credential? */
+  private static boolean credSegment(String seg) {
+    int eq = seg.indexOf('=');
+    return eq < 0
+        ? suspectValue(seg)
+        : nameHit(seg.substring(0, eq)) || suspectValue(seg.substring(eq + 1));
+  }
+
+  /**
+   * A decoded value carrying {@code ?}, {@code &} or {@code =} is a credential when one of its
+   * {@code [?&]} segments is (C6 v3). No further decoding, no recursion.
+   */
+  private static boolean nestedCred(String d) {
+    if (d.indexOf('?') < 0 && d.indexOf('&') < 0 && d.indexOf('=') < 0) {
+      return false;
+    }
+    for (String seg : d.split("[?&]", -1)) {
+      if (credSegment(seg)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Replaces credential-looking query parts with ~r, preserving structure and order (C6 v3). The
+   * string is split on {@code &}, never URL-parsed. Each part's name and value are percent-decoded
+   * before testing. {@code name=value} → {@code name=~r} when the name looks like a credential, the
+   * value looks like one, or the value holds a nested query with a credential segment (replaced
+   * whole, so payloads like {@code q=1' or '1'='1} stay visible to the scorer). A bare part →
+   * {@code ~r} when it looks like a credential value or holds a credential segment. Either half
+   * still encoded after 4 decode passes counts as a credential. The output keeps the raw text.
+   */
   public static String scrubQuery(String query) {
     if (query == null || query.length() <= 1) {
       return query == null ? "" : query;
@@ -46,12 +142,17 @@ public final class Redact {
     for (String p : (lead.isEmpty() ? query : query.substring(1)).split("&", -1)) {
       int eq = p.indexOf('=');
       if (eq < 0) {
-        out.add(p);
+        String d = decode(p);
+        out.add(d == null || suspectValue(d) || nestedCred(d) ? "~r" : p);
         continue;
       }
       String name = p.substring(0, eq);
-      String value = p.substring(eq + 1);
-      out.add(NAME_RE.matcher(name).find() || suspectValue(value) ? name + "=~r" : p);
+      String dn = decode(name);
+      String dv = decode(p.substring(eq + 1));
+      out.add(
+          dn == null || dv == null || nameHit(dn) || suspectValue(dv) || nestedCred(dv)
+              ? name + "=~r"
+              : p);
     }
     return lead + String.join("&", out);
   }
