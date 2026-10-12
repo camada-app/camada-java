@@ -642,10 +642,10 @@ public class Camada {
         res.setContentType(h.getValue());
       } else if (h.getKey().equalsIgnoreCase("content-security-policy")) {
         // the challenge page brings its own policy: one set earlier would block its solver.
-        // setHeader replaces every earlier CSP value. A null value removes the report-only one
-        // (Servlet 6.1); a container that ignores it keeps a policy that reports, never blocks.
+        // setHeader replaces every earlier CSP value. A report-only one is overwritten with the
+        // same policy rather than removed: setHeader(name, null) is a no-op on Tomcat 10.1.
         if (res.containsHeader("Content-Security-Policy-Report-Only")) {
-          res.setHeader("Content-Security-Policy-Report-Only", null);
+          res.setHeader("Content-Security-Policy-Report-Only", h.getValue());
         }
         res.setHeader(h.getKey(), h.getValue());
       } else {
