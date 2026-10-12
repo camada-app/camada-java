@@ -298,6 +298,8 @@ public class Camada {
     if (v.block()) {
       List<Map.Entry<String, String>> headers = new ArrayList<>();
       headers.add(h("content-type", "text/plain"));
+      // per-visitor: no shared cache keeps it (camada-all-8lp6)
+      headers.add(h("cache-control", "no-store"));
       headers.add(h("x-block-reason", v.reason() == null ? "" : v.reason()));
       headers.add(h("x-block-version", v.version() == null ? "" : v.version()));
       if (v.rule() != null) {
@@ -647,6 +649,10 @@ public class Camada {
         if (res.containsHeader("Content-Security-Policy-Report-Only")) {
           res.setHeader("Content-Security-Policy-Report-Only", h.getValue());
         }
+        res.setHeader(h.getKey(), h.getValue());
+      } else if (h.getKey().equalsIgnoreCase("cache-control")) {
+        // a block or challenge answer is per-visitor: a public cache-control set earlier would
+        // let a shared cache keep it (camada-all-8lp6). setHeader replaces every earlier value.
         res.setHeader(h.getKey(), h.getValue());
       } else {
         res.addHeader(h.getKey(), h.getValue());
