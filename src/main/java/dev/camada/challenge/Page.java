@@ -1,5 +1,10 @@
 package dev.camada.challenge;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
+
 /**
  * The 403 challenge page: one self-contained HTML document, no external assets, no-store —
  * byte-for-byte the page {@code @camada/core} serves (src/challenge/page.ts). The inline solver
@@ -10,6 +15,10 @@ package dev.camada.challenge;
  *
  * <p>The page carries its own SHA-256 rather than calling crypto.subtle: subtle is undefined on
  * non-secure origins (plain http on a LAN host), and 65k awaited digests would be slow anyway.
+ *
+ * <p>CSP (camada-all-y38o): the inline script and style depend on {@code bits} alone (the solver
+ * reads the nonce from the form), so {@link #csp(int)} can allow exactly them by hash and a strict
+ * app policy cannot block the solver.
  */
 public final class Page {
   private Page() {}
@@ -57,7 +66,7 @@ public final class Page {
           + "  return s}\n";
 
   private static final String STYLE =
-      ":root{color-scheme:light}\n"
+      "\n:root{color-scheme:light}\n"
           + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fafafa;color:#1a1a1a;"
           + "font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}\n"
           + "main{max-width:28rem;padding:2rem;text-align:center}\n"
@@ -67,6 +76,12 @@ public final class Page {
           + ".bar i{display:block;height:100%;width:30%;background:#1a1a1a;animation:camada-slide 1.1s ease-in-out infinite}\n"
           + "@keyframes camada-slide{0%{transform:translateX(-120%)}100%{transform:translateX(400%)}}\n";
 
+  private static final String[] CSP = new String[33];
+
+  private static int clampBits(int bits) {
+    return Math.min(32, Math.max(1, bits)); // shift 32-bits must stay in range
+  }
+
   public static String render(String nonce, String action, String to) {
     return render(nonce, action, to, Format.POW_BITS);
   }
@@ -75,11 +90,10 @@ public final class Page {
    * {@code action} is the verify endpoint path; {@code to} has already been through safeReturnTo.
    */
   public static String render(String nonce, String action, String to, int bits) {
-    bits = Math.min(32, Math.max(1, bits)); // shift 32-bits must stay in range
     return "<!doctype html>\n"
         + "<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
         + "<title>Checking your browser</title>\n"
-        + "<style>\n"
+        + "<style>"
         + STYLE
         + "</style></head>\n"
         + "<body>\n"
@@ -94,21 +108,29 @@ public final class Page {
         + "\">\n"
         + "<input type=\"hidden\" name=\"nonce\" value=\""
         + Format.escapeAttr(nonce)
-        + "\">\n"
+        + "\" id=\"camada-n\">\n"
         + "<input type=\"hidden\" name=\"solution\" id=\"camada-s\">\n"
         + "<input type=\"hidden\" name=\"to\" value=\""
         + Format.escapeAttr(to)
         + "\">\n"
         + "</form>\n"
         + "<script>"
-        + SOLVER
+        + script(bits)
+        + "</script>\n"
+        + "</body></html>";
+  }
+
+  /**
+   * The page's one inline script. Depends on {@code bits} only: the nonce comes from the form, so
+   * its hash is fixed per bits value.
+   */
+  private static String script(int bits) {
+    return SOLVER
         + "\n"
         + "(function(){\n"
         + "  if(typeof window==='undefined'||window.__camadaAutostart===false)return;\n"
-        + "  var nonce="
-        + Format.escapeScript(nonce)
-        + ",shift="
-        + (32 - bits)
+        + "  var nonce=document.getElementById('camada-n').value,shift="
+        + (32 - clampBits(bits))
         + ";\n"
         + "  function go(){\n"
         + "    for(var n=0;n<5000000;n++){\n"
@@ -118,8 +140,42 @@ public final class Page {
         + "        return}}\n"
         + "    document.getElementById('camada-msg').textContent='Could not complete the check. Please reload.'}\n"
         + "  setTimeout(go,30);\n"
-        + "})();\n"
-        + "</script>\n"
-        + "</body></html>";
+        + "})();\n";
+  }
+
+  public static String csp() {
+    return csp(Format.POW_BITS);
+  }
+
+  /**
+   * The {@code Content-Security-Policy} value to send with {@code render(..., bits)}
+   * (camada-all-y38o): it allows only the page's own inline script and style (by {@code 'sha256-…'}
+   * hash), a form post to the same origin, and nothing else, the same policy as
+   * {@code @camada/core}'s challengePageCsp(). Send it as the response's only CSP, removing any CSP
+   * or CSP-Report-Only the app set before.
+   */
+  public static String csp(int bits) {
+    int b = clampBits(bits);
+    String v = CSP[b];
+    if (v == null) {
+      v =
+          "default-src 'none'; script-src 'sha256-"
+              + sha256Base64(script(b))
+              + "'; style-src 'sha256-"
+              + sha256Base64(STYLE)
+              + "'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'";
+      CSP[b] = v; // a racing thread computes the same string
+    }
+    return v;
+  }
+
+  private static String sha256Base64(String s) {
+    try {
+      return Base64.getEncoder()
+          .encodeToString(
+              MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e); // every Java platform ships SHA-256
+    }
   }
 }

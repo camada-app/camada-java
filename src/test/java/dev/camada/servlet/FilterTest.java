@@ -20,6 +20,7 @@ import dev.camada.Options;
 import dev.camada.Passed;
 import dev.camada.Req;
 import dev.camada.Result;
+import dev.camada.challenge.Page;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -451,6 +452,7 @@ class FilterTest {
     filter.doFilter(req, res, chain);
     assertEquals(403, res.getStatus());
     assertEquals("1", res.getHeader("x-camada-challenge"));
+    assertEquals(Page.csp(), res.getHeader("content-security-policy")); // camada-all-y38o
     assertTrue(res.getContentType().startsWith("text/html"));
     assertTrue(res.getContentAsString().contains("camada-f"));
     List<Map<String, Object>> evs = events();
@@ -471,6 +473,28 @@ class FilterTest {
     assertEquals(2, all.size());
     assertEquals(200L, ((Number) all.get(1).get("st")).longValue());
     assertNull(all.get(1).get("blk"));
+  }
+
+  @Test
+  void theChallengePageReplacesTheHostsCsp() throws Exception {
+    // camada-all-y38o: a strict app-wide policy set before the page would block its solver
+    CamadaFilter filter = new CamadaFilter(engine);
+    FilterChain chain =
+        (rq, rs) -> {
+          HttpServletResponse res = (HttpServletResponse) rs;
+          res.setHeader("Content-Security-Policy", "default-src 'self'");
+          res.addHeader("Content-Security-Policy", "script-src 'none'");
+          res.setHeader("Content-Security-Policy-Report-Only", "script-src 'none'");
+          Camada.serveChallenge((HttpServletRequest) rq, res);
+        };
+    MockHttpServletResponse res = new MockHttpServletResponse();
+    filter.doFilter(
+        ServletDriver.request(new Call("GET", "/export").header("accept", "text/html")),
+        res,
+        chain);
+    assertEquals(403, res.getStatus());
+    assertEquals(List.of(Page.csp()), res.getHeaders("content-security-policy"));
+    assertNull(res.getHeader("content-security-policy-report-only"));
   }
 
   @Test
