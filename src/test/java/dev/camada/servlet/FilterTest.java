@@ -107,6 +107,50 @@ class FilterTest {
   }
 
   @Test
+  void peerIsGetRemoteAddrAndAnUnreadableOneNeverWalksXff() throws Exception {
+    // C6 v3 adapter row (java): getRemoteAddr() is the peer; null on a TCP listener = unreadable
+    // (no client ip); a unix-socket listener has no peer, so cidrs walks X-Forwarded-For alone.
+    Camada cf =
+        Hosts.engineWith(analyst, Map.of("CAMADA_TRUSTED_PROXY", "cidrs:172.64.0.0/13"), null);
+    Hosts.loaded(cf);
+    try {
+      String xff = "1.2.3.4, 198.51.100.9, 172.64.1.1";
+      String[][] rows = {
+        {"tcp", "172.64.1.1", "198.51.100.9"}, // through the edge
+        {"tcp", "::ffff:203.0.113.200", "203.0.113.200"}, // a direct hit: the peer
+        {"tcp", null, null}, // unreadable on TCP: null, never the walk
+        {"tcp", "", null},
+        {"unix", null, "198.51.100.9"}, // unix-socket listener: no peer, the walk
+        {"unix", "/run/app.sock", "198.51.100.9"}, // whatever the container reports there
+      };
+      for (String[] row : rows) {
+        CamadaFilter filter = new CamadaFilter(cf);
+        if ("unix".equals(row[0]) && row[1] == null) {
+          org.springframework.mock.web.MockFilterConfig config =
+              new org.springframework.mock.web.MockFilterConfig();
+          config.addInitParameter(CamadaFilter.UNIX_SOCKET_PARAM, "true"); // web.xml form
+          filter.init(config);
+        } else {
+          filter.unixSocketListener("unix".equals(row[0]));
+        }
+        MockHttpServletRequest req =
+            ServletDriver.request(new Call("GET", "/").header("x-forwarded-for", xff));
+        req.setRemoteAddr(row[1]);
+        Req r = CamadaFilter.reqFrom(req, "unix".equals(row[0]));
+        assertEquals("unix".equals(row[0]) ? null : row[1], r.peer());
+        assertEquals(
+            "tcp".equals(row[0]) && (row[1] == null || row[1].isEmpty()), r.peerUnreadable());
+        filter.doFilter(req, new MockHttpServletResponse(), (rq, rs) -> {});
+        cf.queue().flush();
+        List<Map<String, Object>> evs = analyst.allEvents();
+        assertEquals(row[2], evs.get(evs.size() - 1).get("ip"), String.join(" ", row[0], row[1]));
+      }
+    } finally {
+      cf.stop();
+    }
+  }
+
+  @Test
   void cookiesSplitOverSeveralFieldsStillJoinTheSession() throws Exception {
     ServletDriver d = new ServletDriver(engine);
     d.call(new Call("GET", "/").header("cookie", "a=1").header("cookie", "_sfp=abc"));
