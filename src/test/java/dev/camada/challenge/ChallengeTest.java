@@ -5,6 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Base64;
+import java.util.HexFormat;
 import java.util.Map;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -202,6 +206,70 @@ public class ChallengeTest {
     void difficultyIsClamped() {
       assertTrue(Page.render("a".repeat(32), "/v", "/", 99).contains("shift=0"));
       assertTrue(Page.render("a".repeat(32), "/v", "/", 0).contains("shift=31"));
+    }
+
+    @Test
+    void byteIdenticalToTheFamilyPage() throws Exception {
+      // the page @camada/core serves (src/challenge/page.ts, camada-all-mwpo), pinned by digest:
+      // sha256 of challengePage({ nonce: '0'.repeat(32), action: '/__camada/challenge', to: '/' })
+      String html = Page.render("0".repeat(32), "/__camada/challenge", "/");
+      byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+      assertEquals(
+          "c80afc5fe51bae26f1baa7da9bcecc505aa0b62d347f3ac668209bcc75887f22",
+          HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)));
+      assertEquals(3810, bytes.length);
+    }
+
+    private static String between(String html, String open, String close) {
+      int a = html.indexOf(open) + open.length();
+      return html.substring(a, html.indexOf(close, a));
+    }
+
+    private static String hash(String s) throws Exception {
+      return "'sha256-"
+          + Base64.getEncoder()
+              .encodeToString(
+                  MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)))
+          + "'";
+    }
+
+    @Test
+    void inlineScriptNoLongerCarriesTheNonce() {
+      // camada-all-y38o: one script (one hash) per bits value; the solver reads the form's nonce
+      String a = Page.render("ab".repeat(16), "/v", "/");
+      String b = Page.render("cd".repeat(16), "/v", "/x");
+      assertEquals(between(a, "<script>", "</script>"), between(b, "<script>", "</script>"));
+      assertFalse(between(a, "<script>", "</script>").contains("abab"));
+      assertTrue(
+          a.contains(
+              "<input type=\"hidden\" name=\"nonce\" value=\""
+                  + "ab".repeat(16)
+                  + "\" id=\"camada-n\">"));
+      assertTrue(
+          between(a, "<script>", "</script>")
+              .contains("document.getElementById('camada-n').value"));
+    }
+
+    @Test
+    void cspAllowsExactlyItsOwnInlineScriptAndStyle() throws Exception {
+      for (int bits : new int[] {1, 12, 16, 32}) {
+        String html = Page.render("0".repeat(32), "/v", "/", bits);
+        String csp = Page.csp(bits);
+        assertTrue(
+            csp.contains("script-src " + hash(between(html, "<script>", "</script>")) + ";"));
+        assertTrue(csp.contains("style-src " + hash(between(html, "<style>", "</style>")) + ";"));
+        assertTrue(csp.contains("default-src 'none'"));
+        assertTrue(csp.contains("form-action 'self'"));
+        assertFalse(csp.contains("unsafe"));
+      }
+      // the same policy @camada/core's challengePageCsp(16) sends
+      assertEquals(
+          "default-src 'none'; script-src 'sha256-ciEqEwbzJaoB3rni2OdS8TuYa+/yFdFMAkRscUn8z8k='; "
+              + "style-src 'sha256-uTQFkKw4mZsBeb9oMeUmhuhVK7WwsKvYVU1JAzADMu0='; form-action 'self'; "
+              + "base-uri 'none'; frame-ancestors 'self'",
+          Page.csp());
+      assertEquals(Page.csp(32), Page.csp(99)); // clamped like the page
+      assertNotEquals(Page.csp(12), Page.csp(16));
     }
   }
 }

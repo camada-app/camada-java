@@ -3,6 +3,7 @@ package dev.camada;
 import dev.camada.Config.TrustedProxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Client-IP resolution under the tenant's trusted-proxy config. The default is the socket peer: raw
@@ -15,6 +16,56 @@ public final class Ip {
 
   /** A parsed CIDR: a v4 base (base6 null) or a v6 base as four words. */
   private record Cidr(long base4, int[] base6, int bits) {}
+
+  private static final Pattern PORT = Pattern.compile(":[0-9]{1,5}");
+
+  /**
+   * One X-Forwarded-For entry with any port removed (camada-all-0vho): {@code [v6]:port} and {@code
+   * [v6]} → v6, {@code a.b.c.d:port} → a.b.c.d. A bare IPv6 literal is returned whole (its last
+   * group is never a port); anything else malformed comes back unchanged, so validation rejects it
+   * and the peer wins.
+   */
+  static String stripPort(String e) {
+    if (e.startsWith("[")) {
+      int close = e.indexOf(']');
+      if (close < 0) {
+        return e;
+      }
+      String inner = e.substring(1, close);
+      String rest = e.substring(close + 1);
+      return inner.indexOf(':') >= 0 && (rest.isEmpty() || PORT.matcher(rest).matches())
+          ? inner
+          : e;
+    }
+    int colon = e.indexOf(':');
+    if (colon < 0 || e.indexOf(':', colon + 1) >= 0) {
+      return e; // no colon, or a bare IPv6 literal
+    }
+    String host = e.substring(0, colon);
+    return IpParse.parseIp4(host) >= 0 && PORT.matcher(e.substring(colon)).matches() ? host : e;
+  }
+
+  /**
+   * 127.0.0.0/8 or ::1, any spelling. The peer's {@code ::ffff:127.x.x.x} form is already reduced
+   * to the dotted quad.
+   */
+  private static boolean isLoopback(String ip) {
+    if (ip.indexOf(':') < 0) {
+      long n = IpParse.parseIp4(ip);
+      return n >= 0 && (n >>> 24) == 127;
+    }
+    int[] w = IpParse.parseIp6(ip);
+    return w != null && w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 1;
+  }
+
+  private static boolean trusted(String ip, List<Cidr> trusted) {
+    for (Cidr t : trusted) {
+      if (inCidr(ip, t)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   private static boolean validIp(String s) {
     return s.indexOf(':') < 0 ? IpParse.parseIp4(s) >= 0 : IpParse.parseIp6(s) != null;
@@ -69,17 +120,31 @@ public final class Ip {
   /**
    * The client IP from the socket peer and X-Forwarded-For per the trusted-proxy config. Anything
    * unresolvable falls back to the peer (fail safe).
+   *
+   * <p>XFF entries are read without a port ({@code ip:port}, {@code [v6]:port}, as Azure writes
+   * them) in every mode (camada-all-0vho).
+   *
+   * <p>{@code cidrs} (also what the dashboard's Cloudflare option stores) walks the chain {@code
+   * [...xff, peer]} from the right (camada-all-yfc6): if the socket peer is not a trusted proxy,
+   * the request did not come through one and the peer IS the client; XFF is ignored, since anyone
+   * hitting the origin directly can write it. A loopback peer (127.0.0.0/8, ::1, ::ffff:127.x.x.x)
+   * counts as a trusted hop: a local front end or sidecar, which no remote client can be. Loopback
+   * is trusted only as the peer, never as an XFF entry. With no peer at all the walk runs over XFF
+   * alone, as before: the host's network edge is trusted to have written it. {@code hops} and
+   * {@code vercel} trust XFF by definition and ignore the peer.
    */
   public static String resolveClientIp(String peer, String xff, TrustedProxy cfg) {
     // dual-stack v4-mapped form
-    String sock = peer != null && peer.startsWith("::ffff:") ? peer.substring(7) : peer;
+    String sock =
+        peer != null && peer.regionMatches(true, 0, "::ffff:", 0, 7) ? peer.substring(7) : peer;
     if (cfg == null || "none".equals(cfg.mode()) || xff == null || xff.isEmpty()) {
       return sock;
     }
     List<String> entries = new ArrayList<>();
     for (String e : xff.split(",")) {
-      if (!e.trim().isEmpty()) {
-        entries.add(e.trim());
+      String entry = stripPort(e.trim());
+      if (!entry.isEmpty()) {
+        entries.add(entry);
       }
     }
     if (entries.isEmpty()) {
@@ -104,17 +169,12 @@ public final class Ip {
             trusted.add(parsed);
           }
         }
+        if (sock != null && !isLoopback(sock) && !trusted(sock, trusted)) {
+          return sock; // the peer is the first hop: no trusted proxy wrote this XFF
+        }
         for (int i = entries.size() - 1; i >= 0; i--) {
-          String entry = entries.get(i);
-          boolean isTrusted = false;
-          for (Cidr t : trusted) {
-            if (inCidr(entry, t)) {
-              isTrusted = true;
-              break;
-            }
-          }
-          if (!isTrusted) {
-            candidate = entry;
+          if (!trusted(entries.get(i), trusted)) {
+            candidate = entries.get(i);
             break;
           }
         }

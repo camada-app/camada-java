@@ -147,7 +147,7 @@ public final class Builder {
     ev.put("fm", first.get("sec-fetch-mode"));
     ev.put("fd", first.get("sec-fetch-dest"));
     ev.put("fu", first.get("sec-fetch-user"));
-    ev.put("ref", first.get("referer"));
+    ev.put("ref", Redact.scrubUrl(first.get("referer"))); // the previous page's query too
     ev.put("org", first.get("origin"));
     ev.put("xrw", first.get("x-requested-with"));
     ev.put("auth", authScheme(first.get("authorization"))); // scheme only, never the credential

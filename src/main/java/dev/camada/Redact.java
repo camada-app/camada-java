@@ -56,6 +56,24 @@ public final class Redact {
     return lead + String.join("&", out);
   }
 
+  /**
+   * A URL (a Referer) with its query and fragment run through scrubQuery (camada-all-ijsa); the
+   * scheme, host and path are kept as they are. The path gets the same treatment as the request's
+   * own path {@code p} (none): a same-origin Referer's path already shipped as {@code p} on that
+   * page's own event, and a cross-origin one carries only the origin under the browsers' default
+   * policy.
+   */
+  public static String scrubUrl(String url) {
+    if (url == null) {
+      return null;
+    }
+    int hash = url.indexOf('#');
+    String head = hash < 0 ? url : url.substring(0, hash);
+    int q = head.indexOf('?');
+    String scrubbed = q < 0 ? head : head.substring(0, q) + scrubQuery(head.substring(q));
+    return hash < 0 ? scrubbed : scrubbed + "#" + scrubQuery(url.substring(hash + 1));
+  }
+
   /** Body shape only: field names and byte sizes, never values. One level deep. */
   public static Map<String, Integer> bodyShape(Object obj) {
     Map<String, Object> m = Json.asMap(obj);

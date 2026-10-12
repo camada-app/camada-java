@@ -30,6 +30,34 @@ class BuildTest {
   }
 
   @Test
+  void refererShipsWithItsCredentialsScrubbed() {
+    // camada-all-ijsa: the request's own query was scrubbed, the Referer's was not
+    String jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTQyIn0.sig-sig-sig";
+    Map<String, Object> ev =
+        Builder.build(
+            req(
+                headers(
+                    "referer",
+                    "https://shop.test/reset-password?token=" + jwt + "&code=4/0AbCdEf",
+                    "origin",
+                    "https://shop.test"),
+                "",
+                "1.2.3.4"),
+            "sdk-java",
+            "r1",
+            null,
+            false,
+            null);
+    assertEquals("https://shop.test/reset-password?token=~r&code=~r", ev.get("ref"));
+    assertEquals("https://shop.test", ev.get("org"));
+    String json = dev.camada.Json.stringify(ev);
+    assertFalse(json.contains(jwt));
+    assertFalse(json.contains("4/0AbCdEf"));
+    assertNull(
+        Builder.build(req(List.of(), "", null), "sdk-java", "r2", null, false, null).get("ref"));
+  }
+
+  @Test
   void authSchemeOnlyEverShipsAScheme() {
     assertEquals("Bearer", Builder.authScheme("Bearer abc.def"));
     assertEquals("Basic", Builder.authScheme("Basic dXNlcjpwYXNz"));

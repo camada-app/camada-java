@@ -468,7 +468,8 @@ public class Camada {
         List.of(
             h("content-type", "text/html; charset=utf-8"),
             h("cache-control", "no-store"),
-            h("x-camada-challenge", "1")),
+            h("x-camada-challenge", "1"),
+            h("content-security-policy", Page.csp())), // replaces the app's (camada-all-y38o)
         html.getBytes(StandardCharsets.UTF_8));
   }
 
@@ -636,6 +637,14 @@ public class Camada {
     for (Map.Entry<String, String> h : a.headers()) {
       if (h.getKey().equalsIgnoreCase("content-type")) {
         res.setContentType(h.getValue());
+      } else if (h.getKey().equalsIgnoreCase("content-security-policy")) {
+        // the challenge page brings its own policy: one set earlier would block its solver.
+        // setHeader replaces every earlier CSP value. A null value removes the report-only one
+        // (Servlet 6.1); a container that ignores it keeps a policy that reports, never blocks.
+        if (res.containsHeader("Content-Security-Policy-Report-Only")) {
+          res.setHeader("Content-Security-Policy-Report-Only", null);
+        }
+        res.setHeader(h.getKey(), h.getValue());
       } else {
         res.addHeader(h.getKey(), h.getValue());
       }

@@ -17,6 +17,28 @@ import org.junit.jupiter.api.Test;
  */
 class RedactTest {
   @Test
+  void scrubUrlScrubsTheQueryAndFragmentOnly() {
+    // camada-all-ijsa: a Referer carries the previous page's query (reset tokens, OAuth codes)
+    assertEquals(
+        "https://a.test/reset?token=~r&code=~r",
+        Redact.scrubUrl(
+            "https://a.test/reset?token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.s&code=4/0Ab"));
+    assertEquals(
+        "https://a.test/p?token=~r#code=~r",
+        Redact.scrubUrl("https://a.test/p?token=abc#code=def"));
+    assertEquals(
+        "https://a.test/cb#access_token=~r&expires_in=3599",
+        Redact.scrubUrl("https://a.test/cb#access_token=ya29&expires_in=3599"));
+    // the path is not scrubbed
+    assertEquals(
+        "https://a.test/orders/8812?page=2#reviews",
+        Redact.scrubUrl("https://a.test/orders/8812?page=2#reviews"));
+    assertEquals("https://a.test/p?", Redact.scrubUrl("https://a.test/p?"));
+    assertEquals("/reset?token=~r", Redact.scrubUrl("/reset?token=abc"));
+    assertNull(Redact.scrubUrl(null));
+  }
+
+  @Test
   void scrubQueryByNameAndByValueShape() {
     assertEquals("?q=hello&token=~r&x=1", Redact.scrubQuery("?q=hello&token=abc&x=1"));
     assertEquals("?api_key=~r&PASSWORD=~r", Redact.scrubQuery("?api_key=k&PASSWORD=p"));
