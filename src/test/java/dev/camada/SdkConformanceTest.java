@@ -16,10 +16,11 @@ import org.junit.jupiter.api.TestFactory;
 
 /**
  * The SDK conformance cases (contract C6) every server SDK runs: client-IP resolution
- * (camada-all-0vho XFF ports, camada-all-yfc6 peer-first cidrs walk) and the Referer scrub
- * (camada-all-ijsa). The files live in camada-core/test/fixtures; a missing file fails by name,
- * never skips. No case is skipped here. Configs go through {@link Config#trustedProxy}, the same
- * parse the analyst-delivered tenant config takes.
+ * (camada-all-0vho XFF ports, camada-all-yfc6 peer-first cidrs walk), the Referer scrub and the
+ * request's own query scrub (camada-all-ijsa), fixture version 3. The files live in
+ * camada-core/test/fixtures; a missing file fails by name, never skips. No case is skipped here.
+ * Configs go through {@link Config#trustedProxy}, the same parse the analyst-delivered tenant
+ * config takes.
  */
 class SdkConformanceTest {
   @TestFactory
@@ -77,5 +78,52 @@ class SdkConformanceTest {
     }
     assertFalse(out.isEmpty(), "redact/referer.json has no cases");
     return out.stream();
+  }
+
+  @TestFactory
+  Stream<DynamicTest> queryRedaction() {
+    Map<String, Object> doc = Json.asMap(Fixtures.readJson("redact/query.json"));
+    List<DynamicTest> out = new ArrayList<>();
+    for (Object o : (List<?>) doc.get("cases")) {
+      Map<String, Object> c = Json.asMap(o);
+      String id = (String) c.get("id");
+      out.add(
+          DynamicTest.dynamicTest(
+              id,
+              () -> {
+                List<Map.Entry<String, String>> headers = new ArrayList<>();
+                headers.add(new AbstractMap.SimpleEntry<>("accept", "text/html"));
+                RequestInfo req =
+                    new RequestInfo(
+                        "GET",
+                        "shop.test",
+                        "/api/me",
+                        (String) c.get("query"),
+                        headers,
+                        "1.2.3.4",
+                        "1.1");
+                Map<String, Object> ev = Builder.build(req, "sdk-java", "r1", null, false, null);
+                assertEquals(c.get("q"), ev.get("q"), id);
+                String json = Json.stringify(ev);
+                if (c.get("absent") instanceof List<?> absent) {
+                  for (Object secret : absent) {
+                    assertFalse(json.contains((String) secret), id + ": " + secret);
+                  }
+                }
+              }));
+    }
+    assertFalse(out.isEmpty(), "redact/query.json has no cases");
+    return out.stream();
+  }
+
+  @org.junit.jupiter.api.Test
+  void fixturesAreVersion3() {
+    Map<String, Integer> counts =
+        Map.of("ip/resolve.json", 100, "redact/referer.json", 47, "redact/query.json", 39);
+    for (Map.Entry<String, Integer> e : counts.entrySet()) {
+      Map<String, Object> doc = Json.asMap(Fixtures.readJson(e.getKey()));
+      assertEquals(3, ((Number) doc.get("version")).intValue(), e.getKey());
+      assertEquals(e.getValue(), ((List<?>) doc.get("cases")).size(), e.getKey());
+    }
   }
 }

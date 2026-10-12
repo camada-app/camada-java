@@ -155,7 +155,13 @@ run for, before the filter's first request, they are silent no-ops rather than a
    its own ip. A loopback peer (127.0.0.0/8, `::1`) counts as a trusted hop, since it is a local
    front end or sidecar; behind one, the walk reads `X-Forwarded-For` from the right as before.
    Entries carrying a port (`ip:port`, `[v6]:port`, as Azure Application Gateway writes them)
-   resolve to the address. Keep the container's own forwarded-
+   resolve to the address, and `::ffff:a.b.c.d` entries to `a.b.c.d`. The result is always a
+   valid ip or null: a peer that is not an ip, or a null/empty `getRemoteAddr()` on a TCP
+   listener, gives null, never the `X-Forwarded-For` walk. If your container listens on a unix
+   socket behind a front end, declare it (`new CamadaFilter(...).unixSocketListener(true)` or the
+   filter init-param `camada.unixSocketListener=true`): requests then have no peer and the walk
+   reads `X-Forwarded-For` alone, trusting the front end on the socket to have written it. The
+   setting decides this, never the shape of the peer string. Keep the container's own forwarded-
    header handling off (Spring Boot: `server.forward-headers-strategy=none`, the default) — a
    `RemoteIpValve` would rewrite the peer before camada judges the header.
 3. Enforces before anything else, beacon endpoints included: your ordered custom rules first (first

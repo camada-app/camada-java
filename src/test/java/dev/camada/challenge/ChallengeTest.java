@@ -259,13 +259,13 @@ public class ChallengeTest {
             csp.contains("script-src " + hash(between(html, "<script>", "</script>")) + ";"));
         assertTrue(csp.contains("style-src " + hash(between(html, "<style>", "</style>")) + ";"));
         assertTrue(csp.contains("default-src 'none'"));
-        assertTrue(csp.contains("form-action 'self'"));
+        assertFalse(csp.contains("form-action")); // it would block the redirects after verify's 302
         assertFalse(csp.contains("unsafe"));
       }
       // the same policy @camada/core's challengePageCsp(16) sends
       assertEquals(
           "default-src 'none'; script-src 'sha256-ciEqEwbzJaoB3rni2OdS8TuYa+/yFdFMAkRscUn8z8k='; "
-              + "style-src 'sha256-uTQFkKw4mZsBeb9oMeUmhuhVK7WwsKvYVU1JAzADMu0='; form-action 'self'; "
+              + "style-src 'sha256-uTQFkKw4mZsBeb9oMeUmhuhVK7WwsKvYVU1JAzADMu0='; "
               + "base-uri 'none'; frame-ancestors 'self'",
           Page.csp());
       assertEquals(Page.csp(32), Page.csp(99)); // clamped like the page

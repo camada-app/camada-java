@@ -150,8 +150,12 @@ class BuildTest {
       many.add(new AbstractMap.SimpleEntry<>("x-" + i, "v"));
     }
     Map<String, Object> ev =
-        Builder.build(req(many, "?" + "a".repeat(600), null), "sdk-java", "r", null, false, null);
+        Builder.build(
+            req(many, "?" + "a=1&".repeat(150), null), "sdk-java", "r", null, false, null);
     assertEquals(2048, ((String) ev.get("hord")).length());
     assertEquals(512, ((String) ev.get("q")).length());
+    Map<String, Object> bare =
+        Builder.build(req(many, "?" + "a".repeat(600), null), "sdk-java", "r", null, false, null);
+    assertEquals("?~r", bare.get("q")); // a bare 600-char token-like part is scrubbed (C6 v2)
   }
 }

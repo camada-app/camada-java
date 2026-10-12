@@ -219,6 +219,9 @@ public class Camada {
   }
 
   private String ip(Req req) {
+    if (req.peerUnreadable()) {
+      return null; // a socket whose peer could not be read: never the XFF walk (C6 v3)
+    }
     return Ip.resolveClientIp(req.peer(), req.header("x-forwarded-for"), trustedProxy());
   }
 

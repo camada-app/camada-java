@@ -150,9 +150,10 @@ public final class Page {
   /**
    * The {@code Content-Security-Policy} value to send with {@code render(..., bits)}
    * (camada-all-y38o): it allows only the page's own inline script and style (by {@code 'sha256-…'}
-   * hash), a form post to the same origin, and nothing else, the same policy as
-   * {@code @camada/core}'s challengePageCsp(). Send it as the response's only CSP, removing any CSP
-   * or CSP-Report-Only the app set before.
+   * hash) and nothing else, the same policy as {@code @camada/core}'s challengePageCsp(). There is
+   * no {@code form-action}: browsers apply it to the redirects that follow the POST too, so an app
+   * that 302s on to an external sign-in after verify's 302 would be blocked. Send it as the
+   * response's only CSP, removing any CSP or CSP-Report-Only the app set before.
    */
   public static String csp(int bits) {
     int b = clampBits(bits);
@@ -163,7 +164,7 @@ public final class Page {
               + sha256Base64(script(b))
               + "'; style-src 'sha256-"
               + sha256Base64(STYLE)
-              + "'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'";
+              + "'; base-uri 'none'; frame-ancestors 'self'";
       CSP[b] = v; // a racing thread computes the same string
     }
     return v;

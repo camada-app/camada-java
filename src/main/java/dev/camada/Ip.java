@@ -59,6 +59,9 @@ public final class Ip {
   }
 
   private static boolean trusted(String ip, List<Cidr> trusted) {
+    if (!validIp(ip)) {
+      return false; // a non-IP XFF entry is never a trusted hop (C6 v3)
+    }
     for (Cidr t : trusted) {
       if (inCidr(ip, t)) {
         return true;
@@ -67,8 +70,50 @@ public final class Ip {
     return false;
   }
 
-  private static boolean validIp(String s) {
-    return s.indexOf(':') < 0 ? IpParse.parseIp4(s) >= 0 : IpParse.parseIp6(s) != null;
+  /**
+   * A plain IPv4 or IPv6 address (C6 v3), by grammar alone: ASCII hex groups, so embedded dotted
+   * quads, zone ids and brackets fail ({@link IpParse#parseIp6}); a single leading or trailing
+   * {@code :} ({@code :8:8:8}, {@code 2001:db8::1:}) is rejected here. Never {@code InetAddress},
+   * which accepts forms C6 rejects and resolves host names over DNS.
+   */
+  static boolean validIp(String s) {
+    if (s.indexOf(':') < 0) {
+      return IpParse.parseIp4(s) >= 0;
+    }
+    int n = s.length();
+    if (n < 2
+        || (s.charAt(0) == ':' && s.charAt(1) != ':')
+        || (s.charAt(n - 1) == ':' && s.charAt(n - 2) != ':')) {
+      return false;
+    }
+    return IpParse.parseIp6(s) != null;
+  }
+
+  /**
+   * {@code ::ffff:a.b.c.d} (any case) → a.b.c.d, only when a valid dotted quad follows; anything
+   * else is returned unchanged ({@code ::ffff:7f00:1} stays an ordinary IPv6 address).
+   */
+  static String unmap(String s) {
+    if (s.length() < 14 || !s.regionMatches(true, 0, "::ffff:", 0, 7)) {
+      return s;
+    }
+    String v4 = s.substring(7);
+    return IpParse.parseIp4(v4) >= 0 ? v4 : s;
+  }
+
+  /**
+   * Leading and trailing SP and HTAB only (HTTP OWS); never String.trim/strip, which remove more.
+   */
+  static String trimOws(String s) {
+    int a = 0;
+    int b = s.length();
+    while (a < b && (s.charAt(a) == ' ' || s.charAt(a) == '\t')) {
+      a++;
+    }
+    while (b > a && (s.charAt(b - 1) == ' ' || s.charAt(b - 1) == '\t')) {
+      b--;
+    }
+    return s.substring(a, b);
   }
 
   private static Cidr parseCidr(String c) {
@@ -118,31 +163,38 @@ public final class Ip {
   }
 
   /**
-   * The client IP from the socket peer and X-Forwarded-For per the trusted-proxy config. Anything
-   * unresolvable falls back to the peer (fail safe).
+   * The client IP from the socket peer and X-Forwarded-For per the trusted-proxy config (contract
+   * C6 v3). The result is always a valid IP address or null, in every mode.
    *
-   * <p>XFF entries are read without a port ({@code ip:port}, {@code [v6]:port}, as Azure writes
-   * them) in every mode (camada-all-0vho).
+   * <p>XFF entries are trimmed of space and tab only, read without a port ({@code ip:port}, {@code
+   * [v6]:port}, as Azure writes them) and with {@code ::ffff:a.b.c.d} reduced to a.b.c.d, in every
+   * mode (camada-all-0vho). Several XFF header lines arrive joined with {@code ", "}.
+   *
+   * <p>The peer is {@code getRemoteAddr()} with {@code ::ffff:} removed before a dotted quad, when
+   * that is a valid IP; it is never trimmed or port-stripped. A non-empty peer that is not a valid
+   * IP could not be read: the result falls back to null, never to the XFF walk. Null or empty means
+   * no peer (a unix-socket listener).
    *
    * <p>{@code cidrs} (also what the dashboard's Cloudflare option stores) walks the chain {@code
    * [...xff, peer]} from the right (camada-all-yfc6): if the socket peer is not a trusted proxy,
    * the request did not come through one and the peer IS the client; XFF is ignored, since anyone
    * hitting the origin directly can write it. A loopback peer (127.0.0.0/8, ::1, ::ffff:127.x.x.x)
    * counts as a trusted hop: a local front end or sidecar, which no remote client can be. Loopback
-   * is trusted only as the peer, never as an XFF entry. With no peer at all the walk runs over XFF
-   * alone, as before: the host's network edge is trusted to have written it. {@code hops} and
-   * {@code vercel} trust XFF by definition and ignore the peer.
+   * is trusted only as the peer, never as an XFF entry; an XFF entry that is not a valid IP is
+   * never a trusted hop. With no peer at all the walk runs over XFF alone: the host's network edge
+   * is trusted to have written it. {@code hops} and {@code vercel} trust XFF by definition and
+   * ignore the peer.
    */
   public static String resolveClientIp(String peer, String xff, TrustedProxy cfg) {
-    // dual-stack v4-mapped form
-    String sock =
-        peer != null && peer.regionMatches(true, 0, "::ffff:", 0, 7) ? peer.substring(7) : peer;
+    String mapped =
+        peer == null || peer.isEmpty() ? null : unmap(peer); // dual-stack v4-mapped form
+    String sock = mapped != null && validIp(mapped) ? mapped : null;
     if (cfg == null || "none".equals(cfg.mode()) || xff == null || xff.isEmpty()) {
       return sock;
     }
     List<String> entries = new ArrayList<>();
     for (String e : xff.split(",")) {
-      String entry = stripPort(e.trim());
+      String entry = unmap(stripPort(trimOws(e)));
       if (!entry.isEmpty()) {
         entries.add(entry);
       }
@@ -169,8 +221,9 @@ public final class Ip {
             trusted.add(parsed);
           }
         }
-        if (sock != null && !isLoopback(sock) && !trusted(sock, trusted)) {
-          return sock; // the peer is the first hop: no trusted proxy wrote this XFF
+        if (mapped != null && (sock == null || (!isLoopback(sock) && !trusted(sock, trusted)))) {
+          return sock; // the peer is the first hop: no trusted proxy wrote this XFF; an unreadable
+          // peer never walks
         }
         for (int i = entries.size() - 1; i >= 0; i--) {
           if (!trusted(entries.get(i), trusted)) {

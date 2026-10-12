@@ -12,6 +12,7 @@ import jakarta.servlet.AsyncListener;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.FilterConfig;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.ServletRequest;
@@ -47,8 +48,12 @@ public final class CamadaFilter implements Filter {
   static final String ROUTE_ATTRIBUTE =
       "org.springframework.web.servlet.HandlerMapping.bestMatchingPattern";
 
+  /** The init-param that marks the container's listener as a unix socket ("true"). */
+  public static final String UNIX_SOCKET_PARAM = "camada.unixSocketListener";
+
   private final Camada engine;
   private final Options opts;
+  private volatile boolean unixSocket;
 
   /** The default engine, built from the environment on the first request. */
   public CamadaFilter() {
@@ -70,6 +75,26 @@ public final class CamadaFilter implements Filter {
     this.opts = opts;
   }
 
+  /**
+   * Declares that the container listens on a unix socket (or the {@value #UNIX_SOCKET_PARAM}
+   * init-param is "true"): requests then have no peer, and a cidrs trusted-proxy config walks
+   * X-Forwarded-For alone, trusting the front end on the socket to have written it. On a TCP
+   * listener (the default) a request whose {@code getRemoteAddr()} is null or empty has an
+   * unreadable peer and gets no client ip, never the X-Forwarded-For walk (contract C6 v3). The
+   * decision comes from this setting, never from the shape of the peer string.
+   */
+  public CamadaFilter unixSocketListener(boolean on) {
+    this.unixSocket = on;
+    return this;
+  }
+
+  @Override
+  public void init(FilterConfig config) {
+    if (config != null && "true".equalsIgnoreCase(config.getInitParameter(UNIX_SOCKET_PARAM))) {
+      unixSocket = true;
+    }
+  }
+
   public Camada engine() {
     return engine != null ? engine : Camada.getDefault(opts);
   }
@@ -88,7 +113,7 @@ public final class CamadaFilter implements Filter {
     byte[] body = null;
     HttpServletRequest forApp = req;
     try {
-      r = reqFrom(req);
+      r = reqFrom(req, unixSocket);
       Integer cap = eng.wantsBody(r.method(), r.path());
       if (cap != null) {
         Read read = readBody(req, cap);
@@ -185,9 +210,19 @@ public final class CamadaFilter implements Filter {
   }
 
   /**
-   * The engine's request from the servlet one: lower-cased header names in the container's order.
+   * The engine's request from the servlet one, as on a TCP listener: lower-cased header names in
+   * the container's order.
    */
   public static Req reqFrom(HttpServletRequest r) {
+    return reqFrom(r, false);
+  }
+
+  /**
+   * The engine's request from the servlet one: lower-cased header names in the container's order.
+   * The peer is {@code getRemoteAddr()}; on a unix-socket listener there is none (null), and on a
+   * TCP listener a null or empty one marks the peer unreadable.
+   */
+  public static Req reqFrom(HttpServletRequest r, boolean unixSocketListener) {
     List<Map.Entry<String, String>> headers = new ArrayList<>();
     Enumeration<String> names = r.getHeaderNames();
     if (names != null) {
@@ -207,15 +242,17 @@ public final class CamadaFilter implements Filter {
     String query = r.getQueryString();
     String proto = r.getProtocol();
     String host = r.getHeader("host");
+    String remote = r.getRemoteAddr();
     return new Req(
         r.getMethod() == null ? "GET" : r.getMethod(),
         uri == null || uri.isEmpty() ? "/" : uri,
         query == null || query.isEmpty() ? "" : "?" + query,
         host != null && !host.isEmpty() ? host : r.getServerName(),
         proto != null && proto.startsWith("HTTP/") ? proto.substring(5) : null,
-        r.getRemoteAddr(),
+        unixSocketListener ? null : remote,
         r.isSecure(),
-        headers);
+        headers,
+        !unixSocketListener && (remote == null || remote.isEmpty()));
   }
 
   /**
