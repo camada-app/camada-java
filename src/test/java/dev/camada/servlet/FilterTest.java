@@ -538,7 +538,7 @@ class FilterTest {
         chain);
     assertEquals(403, res.getStatus());
     assertEquals(List.of(Page.csp()), res.getHeaders("content-security-policy"));
-    assertNull(res.getHeader("content-security-policy-report-only"));
+    assertEquals(List.of(Page.csp()), res.getHeaders("content-security-policy-report-only"));
   }
 
   @Test

@@ -171,9 +171,10 @@ run for, before the filter's first request, they are silent no-ops rather than a
    `wrn`; a `skip` rule passes with nothing stamped. Cold (no snapshot yet) passes: fail open.
 4. Challenge: a `challenge` verdict gets the self-contained proof-of-work page (or 403 JSON for a
    non-HTML request). The page sends its own `Content-Security-Policy`, which allows only its
-   inline script and style by hash, in place of any CSP the app or an earlier filter set, so a
-   strict app-wide policy cannot block the solver; `POST /__camada/challenge` verifies the solution, sets `_cch` (bound to the
-   ip, one hour) and 302s back. A request whose ip cannot be resolved is never challenged.
+   inline script and style by hash, in place of any CSP the app or an earlier filter set (a
+   `Content-Security-Policy-Report-Only` one is overwritten with the same policy), so a strict
+   app-wide policy cannot block the solver; `POST /__camada/challenge` verifies the solution, sets
+   `_cch` (bound to the ip, one hour) and 302s back. A request whose ip cannot be resolved is never challenged.
 5. Serves the beacon: `GET /_cam/b.js` (the `@camada/browser` build, vendored into the jar) and
    `POST /_cam/fp` (≤ 32 KB, relayed onto the event batch as a `sig: 1` row with the ip camada
    resolved). Both fall through to your app when the tenant switched the beacon off — with the

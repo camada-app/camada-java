@@ -667,6 +667,8 @@ class EngineTest {
       assertEquals(403, r.status());
       assertNull(r.header("set-cookie"));
       assertTrue(r.text().contains("camada-f"));
+      // the re-served page carries its own policy
+      assertEquals(dev.camada.challenge.Page.csp(), r.header("content-security-policy"));
       String forged = "f".repeat(32);
       Reply r2 =
           h.call(
@@ -675,6 +677,7 @@ class EngineTest {
                   .peer(CHALLENGED_IP));
       assertEquals(403, r2.status());
       assertNull(r2.header("set-cookie"));
+      assertEquals(dev.camada.challenge.Page.csp(), r2.header("content-security-policy"));
     }
 
     @Test
