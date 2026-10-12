@@ -141,6 +141,8 @@ class EngineTest {
       assertEquals("ip4", r.header("x-block-reason"));
       assertEquals(analyst.meta().get("version"), r.header("x-block-version"));
       assertEquals("text/plain", r.header("content-type"));
+      // per-visitor: no shared cache keeps it (camada-all-8lp6)
+      assertEquals("no-store", r.header("cache-control"));
       assertNull(r.header("x-block-rule"));
       assertNull(r.header("x-rid"));
       assertTrue(h.seen().isEmpty());
@@ -526,6 +528,7 @@ class EngineTest {
       assertEquals(403, r.status());
       assertEquals("rule", r.header("x-block-reason"));
       assertEquals("builtin:block", r.header("x-block-rule"));
+      assertEquals("no-store", r.header("cache-control"));
       Map<String, Object> ev = h.events().get(0);
       assertEquals("rule", ev.get("blk"));
       assertEquals("builtin:block", ev.get("rl"));

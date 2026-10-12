@@ -542,6 +542,21 @@ class FilterTest {
   }
 
   @Test
+  void aBlockReplacesACacheControlSetBeforeIt() throws Exception {
+    // camada-all-8lp6: a filter ahead of camada marks every response public; the per-visitor
+    // block 403 must go out with only no-store, or a shared cache serves it to the next visitor
+    MockHttpServletResponse res = new MockHttpServletResponse();
+    res.setHeader("Cache-Control", "public, max-age=600");
+    new CamadaFilter(engine)
+        .doFilter(
+            ServletDriver.request(new Call("GET", "/").peer(FakeAnalyst.BLOCKED_IP)),
+            res,
+            (rq, rs) -> rs.getOutputStream().write("app".getBytes()));
+    assertEquals(403, res.getStatus());
+    assertEquals(List.of("no-store"), res.getHeaders("cache-control"));
+  }
+
+  @Test
   void wrapsTheDefaultEngineLazily() throws Exception {
     Camada.resetDefault();
     CamadaFilter filter =
