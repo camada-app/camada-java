@@ -832,6 +832,34 @@ class EngineTest {
 
     /** Runs on a thread with a stack the size a container's request thread gets (or less). */
     static Reply onASmallStack(Host h, Call c) {
+      return onAStack(h, c, 512 * 1024);
+    }
+
+    /** True when the pattern overflows a stack of this size against the input (JVM-dependent). */
+    static boolean overflowsOn(int stackBytes, String rx, String input) {
+      boolean[] overflowed = {false};
+      Thread t =
+          new Thread(
+              null,
+              () -> {
+                try {
+                  java.util.regex.Pattern.compile(rx).matcher(input).find();
+                } catch (StackOverflowError e) {
+                  overflowed[0] = true;
+                }
+              },
+              "probe",
+              stackBytes);
+      t.start();
+      try {
+        t.join();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      return overflowed[0];
+    }
+
+    static Reply onAStack(Host h, Call c, int stackBytes) {
       Reply[] out = new Reply[1];
       Throwable[] err = new Throwable[1];
       Thread t =
@@ -845,7 +873,7 @@ class EngineTest {
                 }
               },
               "small-stack",
-              512 * 1024);
+              stackBytes);
       t.start();
       try {
         t.join();
@@ -859,12 +887,24 @@ class EngineTest {
     }
 
     @Test
-    void aRegexTheEngineCannotRunNeverMatchesAndNeverThrows() {
-      // Analyst-valid (no ReDoS by its own checker), but java.util.regex recurses once per group
-      // iteration: against a 4 KB path it overflows a request thread's stack where JS and Python
-      // would answer. The request passes (fail open) and the app answers it.
+    void anEngineFailureFailsClosedForACustomRuleAndStaysOpenForTheLegacyList() {
+      // Analyst-valid (no ReDoS by its own checker), but java.util.regex recurses once per
+      // iteration, so a value under the cap overflows a small stack. A custom rule answers its
+      // deny flag when the engine fails (block -> 403); the legacy pathsRegex list is unchanged
+      // (a failure is a miss -> 200). The stack is forced small and the overflow is asserted, so
+      // the outcome does not depend on the platform's default stack.
+      int stack = 64 * 1024;
+      String ua = "a".repeat(2000) + "b";
+      String uaRx = "^(?:a|b)*c";
+      String longPath = "/a".repeat(1024);
+      String pathRx = "^(/[a-z0-9]+)*$";
+      assertTrue(
+          overflowsOn(stack, uaRx, ua), "the engine must fail for this test to mean anything");
+      assertTrue(
+          overflowsOn(stack, pathRx, longPath),
+          "the engine must fail for this test to mean anything");
       analyst.container = "v5";
-      analyst.metaExtra.put("pathsRegex", List.of("^(/[a-z0-9]+)*$"));
+      analyst.metaExtra.put("pathsRegex", List.of(pathRx));
       analyst.metaExtra.put(
           "rules",
           List.of(
@@ -874,17 +914,16 @@ class EngineTest {
                   "action",
                   "block",
                   "conds",
-                  List.of(Map.of("f", "ua", "op", "matches", "v", "(foo|bar)*baz")))));
+                  List.of(Map.of("f", "ua", "op", "matches", "v", uaRx)))));
       Host h = new Host();
-      String longPath = "/a".repeat(2048);
-      assertEquals(200, onASmallStack(h, new Call("GET", longPath)).status());
-      assertEquals(
-          200,
-          onASmallStack(h, new Call("GET", "/").header("user-agent", "foo".repeat(680))).status());
+      assertEquals(200, onAStack(h, new Call("GET", longPath), stack).status());
+      assertEquals(403, onAStack(h, new Call("GET", "/").header("user-agent", ua), stack).status());
       // the same patterns still decide what they can run
-      assertEquals(403, onASmallStack(h, new Call("GET", "/a/b")).status());
+      assertEquals(403, onAStack(h, new Call("GET", "/a/b"), stack).status());
       assertEquals(
-          403, onASmallStack(h, new Call("GET", "/x-y").header("user-agent", "foobaz")).status());
+          200, onAStack(h, new Call("GET", "/x-y").header("user-agent", "abab"), stack).status());
+      assertEquals(
+          403, onAStack(h, new Call("GET", "/x-y").header("user-agent", "abc"), stack).status());
     }
 
     @Test
