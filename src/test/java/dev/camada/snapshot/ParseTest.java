@@ -197,15 +197,16 @@ class ParseTest {
             .rule()); // \d is ASCII, as JS reads it
     Matcher m2 =
         rulesSnapshot(
-            "[{\"id\":\"any\",\"action\":\"block\",\"conds\":[{\"f\":\"ua\",\"op\":\"matches\",\"v\":\"^a[^]b\\\\cJ$\"}]}]");
-    assertEquals("any", m2.match(MatchInput.ip(null).withUa("a\nb\n")).rule());
+            "[{\"id\":\"any\",\"action\":\"block\",\"conds\":[{\"f\":\"ua\",\"op\":\"matches\",\"v\":\"^a[^]b$\"}]}]");
+    assertEquals("any", m2.match(MatchInput.ip(null).withUa("a b")).rule()); // [^] is any char
+
     assertNull(m2.match(MatchInput.ip(null).withUa("ab")).rule());
     // JS's $ is the very end; Java's would also accept a trailing newline
     Matcher m3 =
         rulesSnapshot(
             "[{\"id\":\"end\",\"action\":\"block\",\"conds\":[{\"f\":\"ua\",\"op\":\"matches\",\"v\":\"^x$\"}]}]");
     assertEquals("end", m3.match(MatchInput.ip(null).withUa("x")).rule());
-    assertNull(m3.match(MatchInput.ip(null).withUa("x\n")).rule());
+    assertEquals("end", m3.match(MatchInput.ip(null).withUa("x\n")).rule()); // \n is stripped first
     assertEquals("^a[\\s\\S]b\\x0A\\z", Parser.jsToJava("^a[^]b\\cJ$"));
     assertEquals("[$]\\$a(b)(?<=c)(?<!d)", Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)(?<!d)"));
     assertEquals("a\\x0A", Parser.jsToJava("a\\cj")); // JS reads \cj as \cJ; Java would not
@@ -222,6 +223,91 @@ class ParseTest {
         Parser.jsToJava(
             "^(a)(?:x)(?<n>\\d)\\k<n>\\k<m>[(?<n>]")); // \k<m>: no such group, left alone
     assertNull(Parser.compileRegex("(?<user_id>a)\\k<nope>")); // an unknown name still fails open
+  }
+
+  private static String rule(String id, String action, String f, String name, String rx) {
+    return "{\"id\":\""
+        + id
+        + "\",\"action\":\""
+        + action
+        + "\",\"conds\":[{\"f\":\""
+        + f
+        + "\",\"op\":\"matches\","
+        + (name == null ? "" : "\"name\":\"" + name + "\",")
+        + "\"v\":\""
+        + rx.replace("\\", "\\\\")
+        + "\"}]}";
+  }
+
+  @Test
+  void matchesCapsInputAtMaxFailingClosedForDenyAndMissForSkip() {
+    Matcher deny =
+        rulesSnapshot(
+            "["
+                + rule("u", "warn", "ua", null, "(Scrapy|python-requests)/[0-9]")
+                + ","
+                + rule("h", "challenge", "header", "x-v", "^1\\.[0-2]\\.")
+                + ","
+                + rule("p", "block", "path", null, "^/api/v[0-9]+/dump$")
+                + "]");
+    String a2047 = "a".repeat(Parser.MAX_MATCH_INPUT);
+    assertNull(deny.match(MatchInput.ip(null).withUa(a2047)).rule());
+    assertEquals("u", deny.match(MatchInput.ip(null).withUa(a2047 + "a")).rule());
+    assertNull(deny.match(MatchInput.ip(null).withUa("\u00e9".repeat(2048))).rule());
+    assertNull(deny.match(MatchInput.ip(null).withUa("\ud83d\ude00".repeat(1024))).rule());
+    assertEquals("u", deny.match(MatchInput.ip(null).withUa("\ud83d\ude00".repeat(1025))).rule());
+    assertEquals("h", deny.match(MatchInput.ip(null).withHeader(n -> "9".repeat(2049))).rule());
+    assertNull(deny.match(MatchInput.ip(null).withHeader(n -> "9".repeat(2048))).rule());
+    assertNull(deny.match(MatchInput.ip(null).withPath("/x/" + "a".repeat(2045))).rule());
+    assertEquals("p", deny.match(MatchInput.ip(null).withPath("/x/" + "a".repeat(2046))).rule());
+    assertEquals("p", deny.match(MatchInput.ip(null).withPath("/" + "%61".repeat(700))).rule());
+    assertNull(deny.match(MatchInput.ip(null).withPath("/x?" + "q".repeat(3000))).rule());
+    // a stripped value is measured: 2048 + a TAB is at the cap
+    assertNull(
+        deny.match(MatchInput.ip(null).withUa("Mozilla/5.0 " + "a".repeat(2036) + "\t")).rule());
+
+    Matcher skip =
+        rulesSnapshot(
+            "["
+                + rule("s", "skip", "ua", null, "^uptime-probe/[0-9]")
+                + ","
+                + rule("sp", "skip", "path", null, "^/static-mirror/")
+                + ","
+                + rule("e", "warn", "ua", null, "Scrapy")
+                + ","
+                + rule("c", "block", "path", null, "^/api/v[0-9]+/dump$")
+                + "]");
+    String up = "uptime-probe/1 ";
+    assertEquals("s", skip.match(MatchInput.ip(null).withUa(up + "a".repeat(2033))).rule());
+    assertEquals("e", skip.match(MatchInput.ip(null).withUa(up + "a".repeat(2034))).rule());
+    String sm = "/static-mirror/";
+    assertEquals("sp", skip.match(MatchInput.ip(null).withPath(sm + "a".repeat(2033))).rule());
+    assertEquals("c", skip.match(MatchInput.ip(null).withPath(sm + "a".repeat(2034))).rule());
+    assertEquals("sp", skip.match(MatchInput.ip(null).withPath(sm + "%61".repeat(700))).rule());
+    assertEquals(
+        "c", skip.match(MatchInput.ip(null).withPath(sm + "./".repeat(1100) + "x")).rule());
+  }
+
+  @Test
+  void controlCharsAreStrippedFromUaAndHeaderForMatchesOnly() {
+    Matcher m =
+        rulesSnapshot(
+            "["
+                + rule("e", "warn", "ua", null, "(Scrapy|python-requests)/[0-9]")
+                + ","
+                + rule("s", "skip", "header", "x-p", "^partner-[a-z]+$")
+                + ","
+                + "{\"id\":\"k\",\"action\":\"block\",\"conds\":[{\"f\":\"ua\",\"op\":\"contains\",\"v\":\"curl/\"}]},"
+                + rule("c", "block", "path", null, "^/api/v[0-9]+/dump$")
+                + "]");
+    assertEquals("e", m.match(MatchInput.ip(null).withUa("python-requests\u0000/2.32.0")).rule());
+    assertEquals("e", m.match(MatchInput.ip(null).withUa("Scrapy\t/2.11")).rule());
+    assertEquals("e", m.match(MatchInput.ip(null).withUa("python-requests/\u007f2")).rule());
+    assertNull(m.match(MatchInput.ip(null).withUa("cu\u0000rl/8.4.0")).rule());
+    assertEquals("s", m.match(MatchInput.ip(null).withHeader(n -> "partner-acme\n")).rule());
+    assertNull(m.match(MatchInput.ip(null).withPath("/api/v2/dump\n")).rule());
+    assertNull(m.match(MatchInput.ip(null).withPath("/api/v2/dump%0A")).rule());
+    assertEquals("c", m.match(MatchInput.ip(null).withPath("/api/v2/dump")).rule());
   }
 
   @Test
