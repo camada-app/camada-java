@@ -243,15 +243,25 @@ public final class Parser {
   }
 
   /**
-   * A pattern this runtime cannot run against this input never matches, and never throws:
+   * A pattern this runtime cannot run against this input answers {@code false} and never throws:
    * java.util.regex recurses per group iteration, so a nested quantifier against a long path or
-   * user agent overflows the request thread's stack where JS and Python's engines would not.
+   * user agent overflows the request thread's stack where JS and Python's engines would not. The
+   * legacy path list uses this; a v5 rule uses {@link #find(Pattern, String, boolean)}.
    */
   public static boolean find(Pattern rx, String input) {
+    return find(rx, input, false);
+  }
+
+  /**
+   * As {@link #find(Pattern, String)}, with {@code onFailure} as the answer when the engine fails
+   * (a StackOverflowError or any RuntimeException from the matcher): a deny rule passes true so a
+   * failure fails closed like an over-cap value, a skip rule passes false.
+   */
+  public static boolean find(Pattern rx, String input, boolean onFailure) {
     try {
       return rx.matcher(input).find();
-    } catch (StackOverflowError e) {
-      return false;
+    } catch (StackOverflowError | RuntimeException e) {
+      return onFailure;
     }
   }
 
@@ -438,7 +448,7 @@ public final class Parser {
           }
           // over the cap the regex never runs: a deny rule hits, a skip rule misses (never
           // truncate)
-          return v.length() > MAX_MATCH_INPUT ? deny : find(rx, v);
+          return v.length() > MAX_MATCH_INPUT ? deny : find(rx, v, deny);
         };
       case "contains":
         return r -> {
@@ -479,7 +489,7 @@ public final class Parser {
     String first = values.isEmpty() ? "" : values.get(0);
     if (op.equals("matches")) {
       Pattern rx = compileRegex(first, Pattern.CASE_INSENSITIVE);
-      return p -> rx != null && (p.length() > MAX_MATCH_INPUT ? deny : find(rx, p));
+      return p -> rx != null && (p.length() > MAX_MATCH_INPUT ? deny : find(rx, p, deny));
     }
     if (op.equals("starts_with")) {
       String key = first.endsWith("/") ? Paths.dirKey(first) : Paths.canonPath(first);
