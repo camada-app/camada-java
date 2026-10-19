@@ -28,4 +28,9 @@ class PathsTest {
       assertArrayEquals(new String[] {c[1], c[2], c[3]}, Paths.forms(c[0]), c[0]);
     }
   }
+
+  @Test
+  void rawFormEncodesControlsAsLowerHex() {
+    assertArrayEquals(new String[] {"/a%0a%7f", "/a%0a%7f", "/a%0a%7f"}, Paths.forms("/a\n\u007f"));
+  }
 }

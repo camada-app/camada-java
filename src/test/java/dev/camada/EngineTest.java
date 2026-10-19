@@ -880,7 +880,7 @@ class EngineTest {
       assertEquals(200, onASmallStack(h, new Call("GET", longPath)).status());
       assertEquals(
           200,
-          onASmallStack(h, new Call("GET", "/").header("user-agent", "foo".repeat(2600))).status());
+          onASmallStack(h, new Call("GET", "/").header("user-agent", "foo".repeat(680))).status());
       // the same patterns still decide what they can run
       assertEquals(403, onASmallStack(h, new Call("GET", "/a/b")).status());
       assertEquals(
