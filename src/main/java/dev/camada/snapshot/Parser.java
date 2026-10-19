@@ -218,6 +218,14 @@ public final class Parser {
   /** Longest ua/header/path value a {@code matches} regex reads, in UTF-16 code units. */
   public static final int MAX_MATCH_INPUT = 2048;
 
+  /**
+   * One value through a {@code matches} regex. Over the cap the regex never runs (never truncate):
+   * a deny rule hits, a skip rule misses.
+   */
+  private static boolean capped(Pattern rx, String v, boolean deny) {
+    return v.length() > MAX_MATCH_INPUT ? deny : find(rx, v, deny);
+  }
+
   /** Deletes every [\x00-\x1f\x7f] char: no engine then disagrees about a trailing newline. */
   static String stripControls(String v) {
     int n = v.length();
@@ -444,11 +452,13 @@ public final class Parser {
             return false;
           }
           if (strip) {
-            v = stripControls(v);
+            String s = stripControls(v);
+            if (s != v) {
+              // control chars present: a deny rule tests raw and stripped, a skip never exempts
+              return deny && (capped(rx, v, deny) || capped(rx, s, deny));
+            }
           }
-          // over the cap the regex never runs: a deny rule hits, a skip rule misses (never
-          // truncate)
-          return v.length() > MAX_MATCH_INPUT ? deny : find(rx, v, deny);
+          return capped(rx, v, deny);
         };
       case "contains":
         return r -> {
