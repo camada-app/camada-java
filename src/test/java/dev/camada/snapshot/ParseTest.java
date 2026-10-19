@@ -262,8 +262,10 @@ class ParseTest {
     assertEquals("p", deny.match(MatchInput.ip(null).withPath("/x/" + "a".repeat(2046))).rule());
     assertEquals("p", deny.match(MatchInput.ip(null).withPath("/" + "%61".repeat(700))).rule());
     assertNull(deny.match(MatchInput.ip(null).withPath("/x?" + "q".repeat(3000))).rule());
-    // a stripped value is measured: 2048 + a TAB is at the cap
-    assertNull(
+    // camada-all-wh9m: a deny rule also reads the raw value, so 2048 + a TAB (raw 2049) is over the
+    // cap and hits (v2 pinned a miss here)
+    assertEquals(
+        "u",
         deny.match(MatchInput.ip(null).withUa("Mozilla/5.0 " + "a".repeat(2036) + "\t")).rule());
 
     Matcher skip =
@@ -345,10 +347,56 @@ class ParseTest {
     assertEquals("e", m.match(MatchInput.ip(null).withUa("Scrapy\t/2.11")).rule());
     assertEquals("e", m.match(MatchInput.ip(null).withUa("python-requests/\u007f2")).rule());
     assertNull(m.match(MatchInput.ip(null).withUa("cu\u0000rl/8.4.0")).rule());
-    assertEquals("s", m.match(MatchInput.ip(null).withHeader(n -> "partner-acme\n")).rule());
+    // a skip never exempts a value that carries a control char (v2 pinned "s")
+    assertNull(m.match(MatchInput.ip(null).withHeader(n -> "partner-acme\n")).rule());
+    assertEquals("s", m.match(MatchInput.ip(null).withHeader(n -> "partner-acme")).rule());
     assertNull(m.match(MatchInput.ip(null).withPath("/api/v2/dump\n")).rule());
     assertNull(m.match(MatchInput.ip(null).withPath("/api/v2/dump%0A")).rule());
     assertEquals("c", m.match(MatchInput.ip(null).withPath("/api/v2/dump")).rule());
+  }
+
+  @Test
+  void aDenyReadsRawAndStrippedAndASkipNeverTakesAControlChar() {
+    Matcher m =
+        rulesSnapshot(
+            "["
+                + rule("t", "block", "ua", null, "a\\tb")
+                + ","
+                + rule("q", "block", "ua", null, "sqlmap")
+                + ","
+                + rule("ht", "block", "header", "x-h", "a\\tb")
+                + ","
+                + rule("hq", "block", "header", "x-q", "sqlmap")
+                + "]");
+    assertEquals("t", m.match(MatchInput.ip(null).withUa("a\tb")).rule());
+    assertEquals("q", m.match(MatchInput.ip(null).withUa("sql\tmap")).rule());
+    assertNull(m.match(MatchInput.ip(null).withUa("ab")).rule());
+    assertEquals(
+        "ht", m.match(MatchInput.ip(null).withHeader(n -> n.equals("x-h") ? "a\tb" : null)).rule());
+    assertEquals(
+        "hq",
+        m.match(MatchInput.ip(null).withHeader(n -> n.equals("x-q") ? "sql\tmap" : null)).rule());
+    Matcher s =
+        rulesSnapshot(
+            "["
+                + rule("s", "skip", "ua", null, "^partner-[a-z]+$")
+                + ","
+                + rule("d", "block", "ua", null, "partner")
+                + "]");
+    assertEquals("s", s.match(MatchInput.ip(null).withUa("partner-acme")).rule());
+    assertEquals("d", s.match(MatchInput.ip(null).withUa("partner-acme\n")).rule());
+    // raw over the cap, stripped under it: deny hits, skip misses
+    Matcher o =
+        rulesSnapshot(
+            "["
+                + rule("s", "skip", "ua", null, "^a+$")
+                + ","
+                + rule("d", "block", "ua", null, "^zzz$")
+                + "]");
+    String big = "a".repeat(Parser.MAX_MATCH_INPUT) + "\t";
+    assertEquals("d", o.match(MatchInput.ip(null).withUa(big)).rule());
+    assertEquals(
+        "s", o.match(MatchInput.ip(null).withUa("a".repeat(Parser.MAX_MATCH_INPUT))).rule());
   }
 
   @Test
