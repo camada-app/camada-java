@@ -289,6 +289,47 @@ class ParseTest {
   }
 
   @Test
+  void anEngineFailureUnderTheCapFailsClosedForDenyAndMissForSkip() throws Exception {
+    // java.util.regex recurses per iteration: a 2000-char value under the cap overflows a small
+    // stack
+    String ua = "a".repeat(2000) + "b";
+    String deepRx = "^(?:a|b)*c";
+    boolean[] overflowed = {false};
+    String[] got = new String[3];
+    Thread t =
+        new Thread(
+            null,
+            () -> {
+              try {
+                java.util.regex.Pattern.compile(deepRx).matcher(ua).find();
+              } catch (StackOverflowError e) {
+                overflowed[0] = true;
+              }
+              Matcher deny = rulesSnapshot("[" + rule("d", "block", "ua", null, deepRx) + "]");
+              got[0] = deny.match(MatchInput.ip(null).withUa(ua)).rule();
+              Matcher skip =
+                  rulesSnapshot(
+                      "["
+                          + rule("s", "skip", "ua", null, deepRx)
+                          + ","
+                          + rule("e", "warn", "ua", null, "^a")
+                          + "]");
+              got[1] = skip.match(MatchInput.ip(null).withUa(ua)).rule();
+              Matcher path =
+                  rulesSnapshot("[" + rule("p", "block", "path", null, "^/(?:a|b)*c") + "]");
+              got[2] = path.match(MatchInput.ip(null).withPath("/" + ua)).rule();
+            },
+            "tiny-stack",
+            64 * 1024);
+    t.start();
+    t.join();
+    assertTrue(overflowed[0], "the engine must fail for this test to mean anything");
+    assertEquals("d", got[0]);
+    assertEquals("e", got[1]);
+    assertEquals("p", got[2]);
+  }
+
+  @Test
   void controlCharsAreStrippedFromUaAndHeaderForMatchesOnly() {
     Matcher m =
         rulesSnapshot(
