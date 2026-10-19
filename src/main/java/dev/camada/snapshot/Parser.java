@@ -215,6 +215,33 @@ public final class Parser {
     return cmpWords(r, o, w) <= 0 && cmpWords(r, o + 4, w) >= 0;
   }
 
+  /** Longest ua/header/path value a {@code matches} regex reads, in UTF-16 code units. */
+  public static final int MAX_MATCH_INPUT = 2048;
+
+  /** Deletes every [\x00-\x1f\x7f] char: no engine then disagrees about a trailing newline. */
+  static String stripControls(String v) {
+    int n = v.length();
+    int i = 0;
+    while (i < n && !isControl(v.charAt(i))) {
+      i++;
+    }
+    if (i == n) {
+      return v;
+    }
+    StringBuilder sb = new StringBuilder(n).append(v, 0, i);
+    for (; i < n; i++) {
+      char ch = v.charAt(i);
+      if (!isControl(ch)) {
+        sb.append(ch);
+      }
+    }
+    return sb.toString();
+  }
+
+  private static boolean isControl(char ch) {
+    return ch < 0x20 || ch == 0x7f;
+  }
+
   /**
    * A pattern this runtime cannot run against this input never matches, and never throws:
    * java.util.regex recurses per group iteration, so a nested quantifier against a long path or
@@ -353,7 +380,7 @@ public final class Parser {
     String f = String.valueOf(c.getOrDefault("f", ""));
     String op = String.valueOf(c.getOrDefault("op", ""));
     if (f.equals("path")) { // every path op reads the canonical forms (see Paths), never fieldValue
-      Predicate<String> pred = pathPred(op, values(c.get("v")));
+      Predicate<String> pred = pathPred(op, values(c.get("v")), deny);
       return r -> Paths.hit(pred, r.paths, deny);
     }
     boolean negate = op.equals("is_not") || op.equals("not_in");
@@ -400,9 +427,18 @@ public final class Parser {
     switch (op) {
       case "matches":
         Pattern rx = compileRegex(first);
+        boolean strip = f.equals("ua") || f.equals("header");
         return r -> {
           String v = read.apply(r);
-          return v != null && rx != null && find(rx, v);
+          if (v == null || rx == null) {
+            return false;
+          }
+          if (strip) {
+            v = stripControls(v);
+          }
+          // over the cap the regex never runs: a deny rule hits, a skip rule misses (never
+          // truncate)
+          return v.length() > MAX_MATCH_INPUT ? deny : find(rx, v);
         };
       case "contains":
         return r -> {
@@ -439,11 +475,11 @@ public final class Parser {
   }
 
   /** One path condition -> a predicate over a single path form (canonical values, §D3). */
-  private static Predicate<String> pathPred(String op, List<String> values) {
+  private static Predicate<String> pathPred(String op, List<String> values, boolean deny) {
     String first = values.isEmpty() ? "" : values.get(0);
     if (op.equals("matches")) {
       Pattern rx = compileRegex(first, Pattern.CASE_INSENSITIVE);
-      return p -> rx != null && find(rx, p);
+      return p -> rx != null && (p.length() > MAX_MATCH_INPUT ? deny : find(rx, p));
     }
     if (op.equals("starts_with")) {
       String key = first.endsWith("/") ? Paths.dirKey(first) : Paths.canonPath(first);

@@ -101,7 +101,26 @@ public final class Paths {
     if (p.equals("/") || CANON.matcher(p).matches()) {
       return new String[] {p, p, p};
     }
-    return new String[] {p, canonPath(p, false), canonPath(p, true)};
+    return new String[] {encodeControls(p), canonPath(p, false), canonPath(p, true)};
+  }
+
+  /**
+   * The raw form with each [\x00-\x1f\x7f] char written %xx, so a decoded path cannot carry one.
+   */
+  static String encodeControls(String p) {
+    StringBuilder sb = null;
+    for (int i = 0; i < p.length(); i++) {
+      char c = p.charAt(i);
+      if (c < 0x20 || c == 0x7f) {
+        if (sb == null) {
+          sb = new StringBuilder(p.length() + 8).append(p, 0, i);
+        }
+        sb.append('%').append(HEX[c >> 4]).append(HEX[c & 15]);
+      } else if (sb != null) {
+        sb.append(c);
+      }
+    }
+    return sb == null ? p : sb.toString();
   }
 
   static String dir(String p) {
