@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
  * package.json, so the two must agree.
  */
 class VersionTest {
-  // edge-analyst src/freshness.js sdkId: SDK_RE with a name from SDK_NAMES (exact case); anything else is silently dropped from sdk_versions.
+  // edge-analyst src/freshness.js sdkId (SDK_RE, exact-case SDK_NAMES): anything else is dropped.
   static final Pattern ANALYST_SDK_RE =
       Pattern.compile("^@camada/java/\\d+\\.\\d+\\.\\d+[A-Za-z0-9.-]*$");
   // what camada-backend / camada-web / camada-mkt read out of this repo's pom.xml
