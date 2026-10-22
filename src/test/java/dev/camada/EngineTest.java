@@ -444,6 +444,39 @@ class EngineTest {
     }
 
     @Test
+    void stripsSdkAttestedKeysAVisitorPutsInTheBeaconBody() {
+      hops1(analyst);
+      Host h = new Host();
+      String[] keys = {
+        "tlsx", "ja4", "asn", "cc", "sid", "ns", "st", "dur", "rt", "blk", "rl", "wrn", "chs", "ch",
+        "et", "uid"
+      };
+      StringBuilder body = new StringBuilder("{\"rid\":\"r-1\",\"tz\":\"UTC\"");
+      for (String k : keys) {
+        body.append(",\"").append(k).append("\":\"forged\"");
+      }
+      body.append("}");
+      Reply fp =
+          h.call(
+              new Call("POST", "/_cam/fp")
+                  .header("x-forwarded-for", "198.18.0.5")
+                  .header("content-type", "application/json")
+                  .body(body.toString()));
+      assertEquals(204, fp.status());
+      List<Map<String, Object>> evs = h.events();
+      assertEquals(1, evs.size());
+      Map<String, Object> row = evs.get(0);
+      assertEquals(1L, num(row, "sig"));
+      assertEquals("r-1", row.get("rid"));
+      assertEquals("UTC", row.get("tz"));
+      assertEquals("198.18.0.5", row.get("ip"));
+      assertEquals("sdk-java", row.get("tap"));
+      for (String k : keys) {
+        assertFalse(row.containsKey(k), k);
+      }
+    }
+
+    @Test
     void dropsJunkBodiesInsteadOfShippingThem() {
       Host h = new Host();
       for (String junk : new String[] {"not json", "[1,2]", "42", ""}) {
