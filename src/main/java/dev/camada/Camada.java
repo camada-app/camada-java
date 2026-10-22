@@ -471,7 +471,7 @@ public class Camada {
       return answer;
     }
     Map<String, Object> row =
-        new LinkedHashMap<>(parsed); // spread first: ip and tap are the server's word
+        new LinkedHashMap<>(parsed); // spread first: ip, tap and rts are the server's word
     row.keySet().removeAll(Constants.REQUEST_ROW_KEYS);
     row.put("sig", 1);
     row.put("ip", ip);
