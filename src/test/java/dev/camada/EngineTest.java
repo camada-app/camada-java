@@ -27,6 +27,7 @@ import dev.camada.challenge.ChallengeTest;
 import dev.camada.snapshot.Matcher.MatchInput;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
@@ -451,17 +452,16 @@ class EngineTest {
         "tlsx", "ja4", "asn", "cc", "sid", "ns", "st", "dur", "rt", "blk", "rl", "wrn", "chs", "ch",
         "et", "uid"
       };
-      StringBuilder body = new StringBuilder("{\"rid\":\"r-1\",\"tz\":\"UTC\"");
+      Map<String, Object> body = new LinkedHashMap<>(Map.of("rid", "r-1", "tz", "UTC"));
       for (String k : keys) {
-        body.append(",\"").append(k).append("\":\"forged\"");
+        body.put(k, "forged");
       }
-      body.append("}");
       Reply fp =
           h.call(
               new Call("POST", "/_cam/fp")
                   .header("x-forwarded-for", "198.18.0.5")
                   .header("content-type", "application/json")
-                  .body(body.toString()));
+                  .body(Json.stringify(body)));
       assertEquals(204, fp.status());
       List<Map<String, Object>> evs = h.events();
       assertEquals(1, evs.size());
