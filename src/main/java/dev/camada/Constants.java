@@ -1,5 +1,7 @@
 package dev.camada;
 
+import java.util.List;
+
 /** The SDK's fixed wire and path constants; the Java twin of camada-python's constants.py. */
 public final class Constants {
   private Constants() {}
@@ -27,6 +29,13 @@ public final class Constants {
 
   /** Matches the server's /fp cap: never accept what ingest will 413. */
   public static final int FP_MAX = 32 * 1024;
+
+  // Row keys only the SDK can attest (TLS/network facts, outcome, session, track()). A beacon body is the
+  // visitor's, so these never ride a sig:1 row; the analyst joins them from the beacon's request row.
+  public static final List<String> REQUEST_ROW_KEYS =
+      List.of(
+          "tlsx", "ja4", "asn", "cc", "sid", "ns", "st", "dur", "rt", "blk", "rl", "wrn", "chs", "ch",
+          "et", "uid");
 
   public static final String CHALLENGE_PATH = "/__camada/challenge";
 
