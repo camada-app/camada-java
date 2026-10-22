@@ -478,6 +478,25 @@ class EngineTest {
     }
 
     @Test
+    void stampsTheRelayClockOnTheBeaconRowOverAForgedRts() {
+      hops1(analyst);
+      Host h = new Host();
+      long before = System.currentTimeMillis();
+      Reply fp =
+          h.call(
+              new Call("POST", "/_cam/fp")
+                  .header("x-forwarded-for", "198.18.0.5")
+                  .header("content-type", "application/json")
+                  .body("{\"rid\":\"r-1\",\"rts\":1}"));
+      long after = System.currentTimeMillis();
+      assertEquals(204, fp.status());
+      List<Map<String, Object>> evs = h.events();
+      assertEquals(1, evs.size());
+      long rts = num(evs.get(0), "rts");
+      assertTrue(rts >= before && rts <= after, "rts " + rts);
+    }
+
+    @Test
     void dropsJunkBodiesInsteadOfShippingThem() {
       Host h = new Host();
       for (String junk : new String[] {"not json", "[1,2]", "42", ""}) {
