@@ -628,9 +628,7 @@ class EngineTest {
       analyst.config.put("sample", 0L);
       Host h = new Host();
       h.call(
-          new Call("GET", "/health/live")
-              .header("accept", "application/json")
-              .peer(CHALLENGED_IP));
+          new Call("GET", "/health/live").header("accept", "application/json").peer(CHALLENGED_IP));
       h.call(new Call("GET", "/api").header("accept", "application/json").peer(CHALLENGED_IP));
       List<Map<String, Object>> evs = h.events();
       assertEquals(2, evs.size());
@@ -667,8 +665,7 @@ class EngineTest {
                 return Reply.of(200, "mine".getBytes(), "cache-control", "public");
               });
       Reply r =
-          h.call(
-              new Call("GET", "/export").header("accept", "application/json").peer(ALLOWED_IP));
+          h.call(new Call("GET", "/export").header("accept", "application/json").peer(ALLOWED_IP));
       assertEquals(200, r.status());
       assertEquals("mine", r.text());
       assertEquals("1", r.header("x-camada-challenge"));
