@@ -544,7 +544,40 @@ class FilterTest {
 
   private static void assertSignalled(HttpServletResponse res) {
     assertEquals("1", res.getHeader("x-camada-challenge"));
-    assertEquals("no-store", res.getHeader("cache-control"));
+    for (String n : Camada.NO_STORE_HEADERS) {
+      assertEquals(List.of("no-store"), List.copyOf(res.getHeaders(n)), n);
+    }
+  }
+
+  @Test
+  void signalOverridesTheAppsCdnCacheHeaders() throws Exception {
+    signalledRun(
+        (rq, rs) -> {
+          HttpServletResponse res = (HttpServletResponse) rs;
+          res.setHeader("CDN-Cache-Control", "public, max-age=60");
+          res.addHeader("Surrogate-Control", "max-age=60");
+          Camada.serveChallenge((HttpServletRequest) rq, res);
+          res.addHeader("Vercel-CDN-Cache-Control", "max-age=60"); // after the signal
+          res.setHeader("Cloudflare-CDN-Cache-Control", "max-age=60");
+          res.getOutputStream().write('x');
+          res.flushBuffer();
+          assertSignalled(res);
+        });
+  }
+
+  @Test
+  void anUnsignalledResponseKeepsTheAppsCdnCacheHeaders() throws Exception {
+    MockHttpServletResponse res = new MockHttpServletResponse();
+    new CamadaFilter(engine)
+        .doFilter(
+            ServletDriver.request(new Call("GET", "/other").header("accept", "application/json")),
+            res,
+            (rq, rs) -> {
+              ((HttpServletResponse) rs).setHeader("CDN-Cache-Control", "public, max-age=60");
+              ((HttpServletResponse) rs).getOutputStream().write('x');
+            });
+    assertNull(res.getHeader("x-camada-challenge"));
+    assertEquals("public, max-age=60", res.getHeader("cdn-cache-control"));
   }
 
   private void signalledRun(FilterChain chain) throws Exception {
