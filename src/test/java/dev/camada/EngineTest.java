@@ -12,6 +12,7 @@ import static dev.camada.FakeAnalyst.SKIP_PATH;
 import static dev.camada.FakeAnalyst.WARN_UA;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -752,7 +753,10 @@ class EngineTest {
           200,
           h.call(html(new Call("GET", "/back")).header("cookie", pair).peer("192.0.2.21"))
               .status());
-      String tampered = "_cch=" + pair.substring(5).replaceFirst("0", "1");
+      // flip the last mac digit so the forgery always differs from the real cookie
+      char end = pair.charAt(pair.length() - 1);
+      String tampered = pair.substring(0, pair.length() - 1) + (end == '0' ? '1' : '0');
+      assertNotEquals(pair, tampered);
       assertEquals(
           403,
           h.call(html(new Call("GET", "/back")).header("cookie", tampered).peer(CHALLENGED_IP))
