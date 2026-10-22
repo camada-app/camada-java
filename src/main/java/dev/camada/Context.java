@@ -5,7 +5,8 @@ package dev.camada;
  * response carries, the session id, the resolved client ip, plus what the helpers need — the
  * request as the engine saw it and the engine that produced it. {@code challenged} records that
  * serveChallenge() answered from inside the app (one request, one event); {@code route} is the
- * matched route pattern the host learns at finish time.
+ * matched route pattern the host learns at finish time. {@code signalled} marks a non-HTML request
+ * that passed under a challenge: its response carries x-camada-challenge and its event {@code chs}.
  */
 public final class Context {
   private final String rid;
@@ -14,6 +15,7 @@ public final class Context {
   final Req req;
   final Camada engine;
   volatile boolean challenged;
+  volatile boolean signalled;
   volatile String route;
 
   Context(String rid, String sid, String ip, Req req, Camada engine) {
@@ -34,6 +36,11 @@ public final class Context {
 
   public String ip() {
     return ip;
+  }
+
+  /** Whether the response must carry x-camada-challenge and no-store; read when it commits. */
+  public boolean signalled() {
+    return signalled;
   }
 
   /** The matched route pattern, for a host that knows it at finish time (rides the event as rt). */

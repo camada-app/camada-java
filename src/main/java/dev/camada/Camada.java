@@ -323,13 +323,18 @@ public class Camada {
     // so without one a single solve would mint a cookie every unidentified client could
     // present. No ip -> no challenge (fail open), the same stance ip rules take.
     String sid = cookieValue(req.header("cookie"), Constants.SESSION_COOKIE);
+    boolean signalled = false;
     if (challengeOn && ip != null && !ip.isEmpty()) {
       // The verify endpoint answers first: a challenged client must be able to reach it.
       if ("POST".equals(req.method()) && req.path().equals(challengePath)) {
         return verify(req, body, ip, sid);
       }
       if (v.challenge() && !challengePassed(req, ip)) {
-        return serveChallenge(req, ip, sid);
+        // a page load gets the challenge; anything else (fetch/XHR/API) passes to the app, flagged
+        if (Format.wantsHtml(req.header("accept"), req.header("sec-fetch-dest"))) {
+          return serveChallenge(req, ip, sid);
+        }
+        signalled = true;
       }
     }
 
@@ -362,6 +367,7 @@ public class Camada {
               + (secure(req) ? "; Secure" : "");
     }
     Context ctx = new Context(rid, sid, ip, req, this);
+    ctx.signalled = signalled;
 
     RemoteConfig cfg = snap.config();
     boolean excluded = false;
@@ -386,7 +392,12 @@ public class Camada {
           try {
             // serveChallenge() may have answered from inside the app, and it already shipped
             // the `blk: "challenge"` row — one request, one event.
-            if (ctx.challenged || isExcluded || !sampled) {
+            if (ctx.challenged) {
+              return;
+            }
+            // a signalled request ships regardless of sample and exclude, like the 403 row it replaces
+            boolean chs = ctx.signalled;
+            if (!chs && (isExcluded || !sampled)) {
               return;
             }
             Map<String, Object> ev = event(req, rid, finalSid, newSession, ip);
@@ -399,6 +410,9 @@ public class Camada {
             }
             if (warnRule != null) {
               ev.put("wrn", warnRule); // §D3: the warn rule that let this request through
+            }
+            if (chs) {
+              ev.put("chs", 1); // challenge signalled (camada-all-82ar)
             }
             queue.push(ev);
           } catch (RuntimeException | StackOverflowError err) {
@@ -479,24 +493,12 @@ public class Camada {
   }
 
   /**
-   * 403 + the proof-of-work page (HTML navigations) or 403 JSON (everything else), plus the {@code
-   * blk: "challenge"} event — a served challenge is reported like a block (contract §D2).
+   * 403 + the proof-of-work page (HTML navigations only), plus the {@code blk: "challenge"} event —
+   * a served challenge is reported like a block (contract §D2).
    */
   private Answer serveChallenge(Req req, String ip, String sid) {
     String to = Format.safeReturnTo(req.path() + req.query());
-    Answer answer;
-    if (Format.wantsHtml(req.header("accept"), req.header("sec-fetch-dest"))) {
-      answer = page(ip, to);
-    } else {
-      answer =
-          new Answer(
-              403,
-              List.of(
-                  h("content-type", "application/json"),
-                  h("cache-control", "no-store"),
-                  h("x-camada-challenge", "1")),
-              "{\"error\":\"challenge_required\"}".getBytes(StandardCharsets.UTF_8));
-    }
+    Answer answer = page(ip, to);
     try {
       Map<String, Object> ev = event(req, UUID.randomUUID().toString(), sid, false, ip);
       ev.put("st", 403);
@@ -536,7 +538,8 @@ public class Camada {
   /**
    * Serve the challenge for this request on demand — for a route the app wants to gate itself. Null
    * when the client already holds a valid _cch (render your own page), or when the client cannot be
-   * identified (fail open).
+   * identified (fail open). A non-HTML request is never challenged: it is signalled (header and
+   * {@code chs: 1} event) and null is returned, so the app answers.
    */
   public Answer serveChallenge(Context ctx) {
     try {
@@ -546,6 +549,10 @@ public class Camada {
       Req req = ctx.req;
       String ip = ctx.ip();
       if (req == null || ip == null || ip.isEmpty() || challengePassed(req, ip)) {
+        return null;
+      }
+      if (!Format.wantsHtml(req.header("accept"), req.header("sec-fetch-dest"))) {
+        ctx.signalled = true;
         return null;
       }
       ctx.challenged = true;
@@ -620,9 +627,10 @@ public class Camada {
   }
 
   /**
-   * Writes the proof-of-work page (or 403 JSON) for a route the app gates itself and returns true;
-   * false once the browser holds a valid _cch, or when the client cannot be identified (fail open)
-   * — render your own page then.
+   * Writes the proof-of-work page for a route the app gates itself and returns true; false once the
+   * browser holds a valid _cch, when the client cannot be identified (fail open), or when the
+   * request is not a page load (it is signalled instead: x-camada-challenge, no-store, {@code chs:
+   * 1}) — render your own response then.
    */
   public static boolean serveChallenge(HttpServletRequest req, HttpServletResponse res)
       throws IOException {

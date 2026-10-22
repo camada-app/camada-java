@@ -520,6 +520,46 @@ class FilterTest {
   }
 
   @Test
+  void signalStampsWhenTheWriterCommitsEvenIfServeChallengeRunsLate() throws Exception {
+    CamadaFilter filter = new CamadaFilter(engine);
+    FilterChain chain =
+        (rq, rs) -> {
+          HttpServletResponse res = (HttpServletResponse) rs;
+          java.io.PrintWriter w = res.getWriter(); // headers not committed until the first write
+          res.setHeader("Cache-Control", "public");
+          assertFalse(Camada.serveChallenge((HttpServletRequest) rq, res));
+          w.write("mine");
+          w.flush();
+        };
+    MockHttpServletRequest req =
+        ServletDriver.request(new Call("GET", "/export").header("accept", "application/json"));
+    MockHttpServletResponse res = new MockHttpServletResponse();
+    filter.doFilter(req, res, chain);
+    assertEquals("mine", res.getContentAsString());
+    assertEquals("1", res.getHeader("x-camada-challenge"));
+    assertEquals("no-store", res.getHeader("cache-control"));
+    assertEquals(1L, ((Number) events().get(0).get("chs")).longValue());
+  }
+
+  @Test
+  void signalStampsABodylessResponse() throws Exception {
+    CamadaFilter filter = new CamadaFilter(engine);
+    MockHttpServletRequest req =
+        ServletDriver.request(new Call("GET", "/export").header("accept", "application/json"));
+    MockHttpServletResponse res = new MockHttpServletResponse();
+    filter.doFilter(
+        req,
+        res,
+        (rq, rs) -> {
+          Camada.serveChallenge((HttpServletRequest) rq, (HttpServletResponse) rs);
+          ((HttpServletResponse) rs).setStatus(204);
+        });
+    assertEquals(204, res.getStatus());
+    assertEquals("1", res.getHeader("x-camada-challenge"));
+    assertEquals("no-store", res.getHeader("cache-control"));
+  }
+
+  @Test
   void theChallengePageReplacesTheHostsCsp() throws Exception {
     // camada-all-y38o: a strict app-wide policy set before the page would block its solver
     CamadaFilter filter = new CamadaFilter(engine);
