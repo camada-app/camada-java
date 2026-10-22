@@ -550,8 +550,7 @@ class FilterTest {
   private void signalledRun(FilterChain chain) throws Exception {
     new CamadaFilter(engine)
         .doFilter(
-            ServletDriver.request(
-                new Call("GET", "/export").header("accept", "application/json")),
+            ServletDriver.request(new Call("GET", "/export").header("accept", "application/json")),
             new MockHttpServletResponse(),
             chain);
   }

@@ -395,7 +395,8 @@ public class Camada {
             if (ctx.challenged) {
               return;
             }
-            // a signalled request ships regardless of sample and exclude, like the 403 row it replaces
+            // a signalled request ships regardless of sample and exclude,
+            // like the 403 row it replaces
             boolean chs = ctx.signalled;
             if (!chs && (isExcluded || !sampled)) {
               return;
