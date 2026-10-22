@@ -476,6 +476,7 @@ public class Camada {
     row.put("sig", 1);
     row.put("ip", ip);
     row.put("tap", Constants.TAP);
+    row.put("rts", nowMs()); // the relay's clock, not the browser's
     queue.push(row);
     return answer;
   }
