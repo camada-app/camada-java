@@ -46,10 +46,7 @@ public final class StatusResponseWrapper extends HttpServletResponseWrapper {
   /** Replaces the app's cache headers and adds the signal, when the request is signalled. */
   void stamp() {
     if (ctx != null && ctx.signalled() && !isCommitted()) {
-      for (String n : Camada.NO_STORE_HEADERS) {
-        super.setHeader(n, "no-store"); // per client: replaces whatever the app set
-      }
-      super.setHeader("X-Camada-Challenge", "1");
+      Camada.signal(this);
     }
   }
 
