@@ -83,4 +83,65 @@ class TomcatTest {
       engine.stop();
     }
   }
+
+  /** A signalled response must carry both headers to a real client, flushed early or large. */
+  @Test
+  void signalledResponsesCarryBothHeadersOnTomcat() throws Exception {
+    FakeAnalyst analyst = new FakeAnalyst();
+    Camada engine = Hosts.engineWith(analyst);
+    Hosts.loaded(engine);
+    Tomcat tomcat = new Tomcat();
+    tomcat.setPort(0);
+    tomcat.setBaseDir(Files.createTempDirectory("camada-tomcat").toString());
+    tomcat.getConnector();
+    Context ctx = tomcat.addContext("", null);
+    FilterDef def = new FilterDef();
+    def.setFilterName("camada");
+    def.setFilter(new CamadaFilter(engine));
+    ctx.addFilterDef(def);
+    FilterMap map = new FilterMap();
+    map.setFilterName("camada");
+    map.addURLPatternDecoded("/*");
+    ctx.addFilterMap(map);
+    Tomcat.addServlet(
+        ctx,
+        "app",
+        new HttpServlet() {
+          private static final long serialVersionUID = 1L;
+
+          @Override
+          protected void doGet(HttpServletRequest q, HttpServletResponse r) throws IOException {
+            Camada.serveChallenge(q, r);
+            r.setHeader("Cache-Control", "public");
+            if (q.getRequestURI().equals("/big")) {
+              r.getWriter().write("x".repeat(20000)); // past the 8 KB buffer: commits mid-write
+            } else {
+              r.getWriter().write("hi");
+              r.flushBuffer();
+              r.getWriter().write("more");
+            }
+          }
+        });
+    ctx.addServletMappingDecoded("/", "app");
+    tomcat.start();
+    try {
+      int port = tomcat.getConnector().getLocalPort();
+      for (String path : List.of("/big", "/flush")) {
+        HttpResponse<String> res =
+            HttpClient.newHttpClient()
+                .send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                        .header("accept", "application/json")
+                        .build(),
+                    HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, res.statusCode(), path);
+        assertEquals("1", res.headers().firstValue("x-camada-challenge").orElse(null), path);
+        assertEquals("no-store", res.headers().firstValue("cache-control").orElse(null), path);
+      }
+    } finally {
+      tomcat.stop();
+      tomcat.destroy();
+      engine.stop();
+    }
+  }
 }

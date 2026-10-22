@@ -526,10 +526,11 @@ class FilterTest {
         (rq, rs) -> {
           HttpServletResponse res = (HttpServletResponse) rs;
           java.io.PrintWriter w = res.getWriter(); // headers not committed until the first write
-          res.setHeader("Cache-Control", "public");
           assertFalse(Camada.serveChallenge((HttpServletRequest) rq, res));
+          res.setHeader("Cache-Control", "public"); // after the eager stamp: the hook must win
           w.write("mine");
           w.flush();
+          assertSignalled(res); // at commit, not just at finish
         };
     MockHttpServletRequest req =
         ServletDriver.request(new Call("GET", "/export").header("accept", "application/json"));
@@ -539,6 +540,102 @@ class FilterTest {
     assertEquals("1", res.getHeader("x-camada-challenge"));
     assertEquals("no-store", res.getHeader("cache-control"));
     assertEquals(1L, ((Number) events().get(0).get("chs")).longValue());
+  }
+
+  private static void assertSignalled(HttpServletResponse res) {
+    assertEquals("1", res.getHeader("x-camada-challenge"));
+    assertEquals("no-store", res.getHeader("cache-control"));
+  }
+
+  private void signalledRun(FilterChain chain) throws Exception {
+    new CamadaFilter(engine)
+        .doFilter(
+            ServletDriver.request(
+                new Call("GET", "/export").header("accept", "application/json")),
+            new MockHttpServletResponse(),
+            chain);
+  }
+
+  @Test
+  void signalStampsWhenTheOutputStreamCommits() throws Exception {
+    signalledRun(
+        (rq, rs) -> {
+          HttpServletResponse res = (HttpServletResponse) rs;
+          jakarta.servlet.ServletOutputStream o = res.getOutputStream();
+          Camada.serveChallenge((HttpServletRequest) rq, res);
+          res.setHeader("Cache-Control", "public");
+          o.write('x');
+          o.flush();
+          assertSignalled(res);
+        });
+  }
+
+  @Test
+  void signalStampsOnSendError() throws Exception {
+    signalledRun(
+        (rq, rs) -> {
+          HttpServletResponse res = (HttpServletResponse) rs;
+          Camada.serveChallenge((HttpServletRequest) rq, res);
+          res.setHeader("Cache-Control", "public");
+          res.sendError(404);
+          assertSignalled(res);
+        });
+  }
+
+  @Test
+  void signalReachesTheRawResponseBeforeTheApp() throws Exception {
+    FakeAnalyst a4 = new FakeAnalyst();
+    a4.container = "v4";
+    Camada e4 = Hosts.engineWith(a4);
+    Hosts.loaded(e4);
+    new CamadaFilter(e4)
+        .doFilter(
+            ServletDriver.request(
+                new Call("GET", "/api")
+                    .header("accept", "application/json")
+                    .peer(dev.camada.FakeAnalyst.CHALLENGED_IP)),
+            new MockHttpServletResponse(),
+            (rq, rs) -> assertSignalled((HttpServletResponse) rs));
+    e4.stop();
+  }
+
+  @Test
+  void theWrappedWriterDelegatesCheckErrorToTheContainerWriter() throws Exception {
+    java.io.PrintWriter broken =
+        new java.io.PrintWriter(
+            new java.io.Writer() {
+              @Override
+              public void write(char[] c, int o, int l) throws IOException {
+                throw new IOException("client gone");
+              }
+
+              @Override
+              public void flush() {}
+
+              @Override
+              public void close() {}
+            });
+    MockHttpServletResponse raw =
+        new MockHttpServletResponse() {
+          @Override
+          public java.io.PrintWriter getWriter() {
+            return broken;
+          }
+        };
+    CamadaFilter filter = new CamadaFilter(engine);
+    boolean[] seen = new boolean[2];
+    filter.doFilter(
+        ServletDriver.request(new Call("GET", "/export").header("accept", "application/json")),
+        raw,
+        (rq, rs) -> {
+          java.io.PrintWriter w = rs.getWriter();
+          seen[0] = w.checkError();
+          w.write("x");
+          w.flush();
+          seen[1] = w.checkError();
+        });
+    assertFalse(seen[0]);
+    assertTrue(seen[1]);
   }
 
   @Test
