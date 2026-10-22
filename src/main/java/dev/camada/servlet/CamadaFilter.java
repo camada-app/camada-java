@@ -145,6 +145,12 @@ public final class CamadaFilter implements Filter {
     if (p.setCookie() != null) {
       res.addHeader("Set-Cookie", p.setCookie());
     }
+    if (p.ctx() != null && p.ctx().signalled()) {
+      // the app may write to the raw response (startAsync()), so set it here too; the wrapper's
+      // commit-time stamp replaces cache-control again if the app overrides it
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Camada-Challenge", "1");
+    }
     if (p.onFinish() == null) {
       chain.doFilter(req, res);
       return;
@@ -170,6 +176,7 @@ public final class CamadaFilter implements Filter {
       chain.doFilter(req, wrapped);
     } catch (IOException | ServletException | RuntimeException | Error e) {
       if (fired.compareAndSet(false, true)) {
+        wrapped.stamp();
         p.onFinish().accept(500); // the app threw: the container will answer 500
       }
       throw e;

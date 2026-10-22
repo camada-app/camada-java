@@ -7,7 +7,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpServletResponseWrapper;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.io.Writer;
 
 /**
  * The status the app settled on, read from the container's own response when the response is done —
@@ -45,7 +44,7 @@ public final class StatusResponseWrapper extends HttpServletResponseWrapper {
 
   /** Replaces the app's cache-control and adds the signal, when the request is signalled. */
   void stamp() {
-    if (ctx != null && ctx.signalled()) {
+    if (ctx != null && ctx.signalled() && !isCommitted()) {
       super.setHeader("Cache-Control", "no-store"); // per client: replaces whatever the app set
       super.setHeader("X-Camada-Challenge", "1");
     }
@@ -124,25 +123,38 @@ public final class StatusResponseWrapper extends HttpServletResponseWrapper {
     if (ctx == null) {
       return out;
     }
-    return new PrintWriter(
-        new Writer() {
-          @Override
-          public void write(char[] c, int off, int len) {
-            stamp();
-            out.write(c, off, len);
-          }
+    // a PrintWriter around the container's own: checkError() reaches it, so a client disconnect
+    // still shows to the app's SSE / long-poll loop
+    return new PrintWriter(out) {
+      @Override
+      public void write(int c) {
+        stamp();
+        super.write(c);
+      }
 
-          @Override
-          public void flush() {
-            stamp();
-            out.flush();
-          }
+      @Override
+      public void write(char[] c, int off, int len) {
+        stamp();
+        super.write(c, off, len);
+      }
 
-          @Override
-          public void close() {
-            stamp();
-            out.close();
-          }
-        });
+      @Override
+      public void write(String str, int off, int len) {
+        stamp();
+        super.write(str, off, len);
+      }
+
+      @Override
+      public void flush() {
+        stamp();
+        super.flush();
+      }
+
+      @Override
+      public void close() {
+        stamp();
+        super.close();
+      }
+    };
   }
 }
