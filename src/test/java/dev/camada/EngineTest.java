@@ -591,21 +591,92 @@ class EngineTest {
       assertEquals("/account", ev.get("p"));
     }
 
+    static final Hosts.AppHandler PUBLIC_APP =
+        req -> Reply.of(200, "data".getBytes(), "cache-control", "public, max-age=600");
+
     @Test
-    void answersJsonForANonHtmlRequest() {
-      Host h = new Host();
-      Reply r =
-          h.call(new Call("GET", "/api").header("accept", "application/json").peer(CHALLENGED_IP));
-      assertEquals(403, r.status());
-      assertEquals("application/json", r.header("content-type"));
-      assertEquals("{\"error\":\"challenge_required\"}", r.text());
+    void passesANonHtmlRequestToTheAppSignalledAndShipsChs() {
+      Host h = new Host(PUBLIC_APP);
+      Call api = new Call("GET", "/api").header("accept", "application/json").peer(CHALLENGED_IP);
+      Reply r = h.call(api);
+      assertEquals(200, r.status());
+      assertEquals("data", r.text());
+      assertEquals("1", r.header("x-camada-challenge"));
+      assertEquals("no-store", r.header("cache-control"));
+      assertNotNull(r.header("x-rid"));
+      assertEquals(1, h.seen().size());
       Reply r2 =
           h.call(
               new Call("GET", "/api")
                   .header("accept", "text/html")
                   .header("sec-fetch-dest", "empty")
                   .peer(CHALLENGED_IP));
-      assertEquals("application/json", r2.header("content-type"));
+      assertEquals(200, r2.status());
+      assertEquals("1", r2.header("x-camada-challenge"));
+      List<Map<String, Object>> evs = h.events();
+      assertEquals(2, evs.size());
+      Map<String, Object> ev = evs.get(0);
+      assertEquals(1L, num(ev, "chs"));
+      assertEquals(200L, num(ev, "st"));
+      assertTrue(num(ev, "dur") >= 0);
+      assertNull(ev.get("blk"));
+    }
+
+    @Test
+    void aSignalledRequestShipsEvenExcludedOrSampledOut() {
+      analyst.config.put("exclude", List.of("/health"));
+      analyst.config.put("sample", 0L);
+      Host h = new Host();
+      h.call(
+          new Call("GET", "/health/live")
+              .header("accept", "application/json")
+              .peer(CHALLENGED_IP));
+      h.call(new Call("GET", "/api").header("accept", "application/json").peer(CHALLENGED_IP));
+      List<Map<String, Object>> evs = h.events();
+      assertEquals(2, evs.size());
+      for (Map<String, Object> ev : evs) {
+        assertEquals(1L, num(ev, "chs"));
+        assertEquals(200L, num(ev, "st"));
+      }
+    }
+
+    @Test
+    void aNonHtmlRequestWithAValidCchIsNotSignalled() {
+      Host h = new Host(PUBLIC_APP);
+      String cch = h.engine.kit().issue(CHALLENGED_IP, h.engine.nowMs());
+      Reply r =
+          h.call(
+              new Call("GET", "/api")
+                  .header("accept", "application/json")
+                  .header("cookie", "_cch=" + cch)
+                  .peer(CHALLENGED_IP));
+      assertEquals(200, r.status());
+      assertNull(r.header("x-camada-challenge"));
+      assertEquals("public, max-age=600", r.header("cache-control"));
+      assertNull(h.events().get(0).get("chs"));
+    }
+
+    @Test
+    void onDemandServeChallengeSignalsANonHtmlRequestAndReturnsNull() {
+      analyst.config.put("sample", 0L);
+      Host h =
+          new Host(
+              req -> {
+                Context ctx = (Context) req.getAttribute("camada");
+                assertNull(Camada.engineFor(ctx).serveChallenge(ctx));
+                return Reply.of(200, "mine".getBytes(), "cache-control", "public");
+              });
+      Reply r =
+          h.call(
+              new Call("GET", "/export").header("accept", "application/json").peer(ALLOWED_IP));
+      assertEquals(200, r.status());
+      assertEquals("mine", r.text());
+      assertEquals("1", r.header("x-camada-challenge"));
+      assertEquals("no-store", r.header("cache-control"));
+      List<Map<String, Object>> evs = h.events();
+      assertEquals(1, evs.size());
+      assertEquals(1L, num(evs.get(0), "chs"));
+      assertNull(evs.get(0).get("blk"));
     }
 
     @Test
