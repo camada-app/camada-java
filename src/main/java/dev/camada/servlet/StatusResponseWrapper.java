@@ -1,7 +1,13 @@
 package dev.camada.servlet;
 
+import dev.camada.Context;
+import jakarta.servlet.ServletOutputStream;
+import jakarta.servlet.WriteListener;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpServletResponseWrapper;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.Writer;
 
 /**
  * The status the app settled on, read from the container's own response when the response is done —
@@ -9,10 +15,23 @@ import jakarta.servlet.http.HttpServletResponseWrapper;
  * arguments hands the app that object rather than this wrapper, so it is the one source. A host
  * response that cannot say (getStatus() throwing) reads as 200: the event must never take the
  * request down.
+ *
+ * <p>It also stamps a signalled request (a non-HTML one that passed under a challenge) with {@code
+ * x-camada-challenge: 1} and {@code cache-control: no-store} when the response commits: on the
+ * first byte written or flushed, sendError, sendRedirect, flushBuffer, or the end of the request
+ * for a response with no body. The flag is read then, because serveChallenge() can set it from
+ * inside the app.
  */
 public final class StatusResponseWrapper extends HttpServletResponseWrapper {
+  private final Context ctx;
+
   public StatusResponseWrapper(HttpServletResponse response) {
+    this(response, null);
+  }
+
+  public StatusResponseWrapper(HttpServletResponse response, Context ctx) {
     super(response);
+    this.ctx = ctx;
   }
 
   @Override
@@ -22,5 +41,108 @@ public final class StatusResponseWrapper extends HttpServletResponseWrapper {
     } catch (RuntimeException e) {
       return SC_OK;
     }
+  }
+
+  /** Replaces the app's cache-control and adds the signal, when the request is signalled. */
+  void stamp() {
+    if (ctx != null && ctx.signalled()) {
+      super.setHeader("Cache-Control", "no-store"); // per client: replaces whatever the app set
+      super.setHeader("X-Camada-Challenge", "1");
+    }
+  }
+
+  @Override
+  public void sendError(int sc) throws IOException {
+    stamp();
+    super.sendError(sc);
+  }
+
+  @Override
+  public void sendError(int sc, String msg) throws IOException {
+    stamp();
+    super.sendError(sc, msg);
+  }
+
+  @Override
+  public void sendRedirect(String location) throws IOException {
+    stamp();
+    super.sendRedirect(location);
+  }
+
+  @Override
+  public void flushBuffer() throws IOException {
+    stamp();
+    super.flushBuffer();
+  }
+
+  @Override
+  public ServletOutputStream getOutputStream() throws IOException {
+    ServletOutputStream out = super.getOutputStream();
+    if (ctx == null) {
+      return out;
+    }
+    return new ServletOutputStream() {
+      @Override
+      public boolean isReady() {
+        return out.isReady();
+      }
+
+      @Override
+      public void setWriteListener(WriteListener listener) {
+        out.setWriteListener(listener);
+      }
+
+      @Override
+      public void write(int b) throws IOException {
+        stamp();
+        out.write(b);
+      }
+
+      @Override
+      public void write(byte[] b, int off, int len) throws IOException {
+        stamp();
+        out.write(b, off, len);
+      }
+
+      @Override
+      public void flush() throws IOException {
+        stamp();
+        out.flush();
+      }
+
+      @Override
+      public void close() throws IOException {
+        stamp();
+        out.close();
+      }
+    };
+  }
+
+  @Override
+  public PrintWriter getWriter() throws IOException {
+    PrintWriter out = super.getWriter();
+    if (ctx == null) {
+      return out;
+    }
+    return new PrintWriter(
+        new Writer() {
+          @Override
+          public void write(char[] c, int off, int len) {
+            stamp();
+            out.write(c, off, len);
+          }
+
+          @Override
+          public void flush() {
+            stamp();
+            out.flush();
+          }
+
+          @Override
+          public void close() {
+            stamp();
+            out.close();
+          }
+        });
   }
 }

@@ -149,7 +149,7 @@ public final class CamadaFilter implements Filter {
       chain.doFilter(req, res);
       return;
     }
-    StatusResponseWrapper wrapped = new StatusResponseWrapper(res);
+    StatusResponseWrapper wrapped = new StatusResponseWrapper(res, p.ctx());
     AtomicBoolean fired = new AtomicBoolean();
     Runnable finish =
         () -> {
@@ -163,6 +163,7 @@ public final class CamadaFilter implements Filter {
           } catch (RuntimeException err) {
             Guarded.logRateLimited(err);
           }
+          wrapped.stamp(); // a response with no body commits after the filter: stamp it now
           p.onFinish().accept(wrapped.getStatus());
         };
     try {
