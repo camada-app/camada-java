@@ -638,6 +638,10 @@ public class Camada {
     Camada eng = engineFor(ctx);
     Answer a = eng == null ? null : eng.serveChallenge(ctx);
     if (a == null) {
+      if (ctx != null && ctx.signalled()) {
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Camada-Challenge", "1");
+      }
       return false;
     }
     write(a, res);
