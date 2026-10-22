@@ -147,8 +147,10 @@ public final class CamadaFilter implements Filter {
     }
     if (p.ctx() != null && p.ctx().signalled()) {
       // the app may write to the raw response (startAsync()), so set it here too; the wrapper's
-      // commit-time stamp replaces cache-control again if the app overrides it
-      res.setHeader("Cache-Control", "no-store");
+      // commit-time stamp replaces the cache headers again if the app overrides them
+      for (String n : Camada.NO_STORE_HEADERS) {
+        res.setHeader(n, "no-store");
+      }
       res.setHeader("X-Camada-Challenge", "1");
     }
     if (p.onFinish() == null) {

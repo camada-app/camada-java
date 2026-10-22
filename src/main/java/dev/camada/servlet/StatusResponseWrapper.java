@@ -1,5 +1,6 @@
 package dev.camada.servlet;
 
+import dev.camada.Camada;
 import dev.camada.Context;
 import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.WriteListener;
@@ -16,10 +17,10 @@ import java.io.PrintWriter;
  * request down.
  *
  * <p>It also stamps a signalled request (a non-HTML one that passed under a challenge) with {@code
- * x-camada-challenge: 1} and {@code cache-control: no-store} when the response commits: on the
- * first byte written or flushed, sendError, sendRedirect, flushBuffer, or the end of the request
- * for a response with no body. The flag is read then, because serveChallenge() can set it from
- * inside the app.
+ * x-camada-challenge: 1} and {@code no-store} on the CDN cache headers when the response commits:
+ * on the first byte written or flushed, sendError, sendRedirect, flushBuffer, or the end of the
+ * request for a response with no body. The flag is read then, because serveChallenge() can set it
+ * from inside the app.
  */
 public final class StatusResponseWrapper extends HttpServletResponseWrapper {
   private final Context ctx;
@@ -42,10 +43,12 @@ public final class StatusResponseWrapper extends HttpServletResponseWrapper {
     }
   }
 
-  /** Replaces the app's cache-control and adds the signal, when the request is signalled. */
+  /** Replaces the app's cache headers and adds the signal, when the request is signalled. */
   void stamp() {
     if (ctx != null && ctx.signalled() && !isCommitted()) {
-      super.setHeader("Cache-Control", "no-store"); // per client: replaces whatever the app set
+      for (String n : Camada.NO_STORE_HEADERS) {
+        super.setHeader(n, "no-store"); // per client: replaces whatever the app set
+      }
       super.setHeader("X-Camada-Challenge", "1");
     }
   }
