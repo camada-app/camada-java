@@ -169,8 +169,8 @@ run for, before the filter's first request, they are silent no-ops rather than a
    A block answers `403 Forbidden` with `x-block-reason`, `x-block-version` and, when a rule
    decided, `x-block-rule`; its event ships with `blk` (and `rl`). A `warn` rule passes and stamps
    `wrn`; a `skip` rule passes with nothing stamped. Cold (no snapshot yet) passes: fail open.
-4. Challenge: a `challenge` verdict gets the self-contained proof-of-work page (or 403 JSON for a
-   non-HTML request). The page sends its own `Content-Security-Policy`, which allows only its
+4. Challenge: a `challenge` verdict gets the self-contained proof-of-work page (a non-HTML request
+   passes to the app with `x-camada-challenge: 1`, `cache-control: no-store` and a `chs: 1` event). The page sends its own `Content-Security-Policy`, which allows only its
    inline script and style by hash, in place of any CSP the app or an earlier filter set (a
    `Content-Security-Policy-Report-Only` one is overwritten with the same policy), so a strict
    app-wide policy cannot block the solver; `POST /__camada/challenge` verifies the solution, sets
@@ -255,9 +255,10 @@ name is free-form; the analyst's app-context rules read this vocabulary:
 | `payment_failed` / `payment_succeeded` | a payment authorisation settled |
 | `coupon_failed` | a promo/voucher code was rejected |
 
-A route you gate yourself: `Camada.serveChallenge(request, response)` writes the page (or the 403
-JSON) and returns true until the browser holds a valid `_cch`, then false — render your own page
-then. The per-request `Context` (`rid`, `sid`, `ip`) is the `"camada"` request attribute.
+A route you gate yourself: `Camada.serveChallenge(request, response)` writes the page for a page
+load and returns true until the browser holds a valid `_cch`, then false — render your own page
+then. A non-HTML request also gets false: it is signalled (`x-camada-challenge: 1`, `no-store`,
+`chs: 1`). The per-request `Context` (`rid`, `sid`, `ip`) is the `"camada"` request attribute.
 
 ## What this tap can see
 
