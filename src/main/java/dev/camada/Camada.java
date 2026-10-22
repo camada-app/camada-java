@@ -39,6 +39,19 @@ import java.util.function.IntConsumer;
  * explicit wiring.
  */
 public class Camada {
+  /**
+   * CDNs read their own cache header ahead of cache-control: a signalled response sets all
+   * no-store.
+   */
+  public static final List<String> NO_STORE_HEADERS =
+      List.of(
+          "cache-control",
+          "cdn-cache-control",
+          "surrogate-control",
+          "cloudflare-cdn-cache-control",
+          "vercel-cdn-cache-control",
+          "netlify-cdn-cache-control");
+
   private static volatile Camada defaultEngine;
 
   private final Map<String, String> source;
@@ -641,7 +654,9 @@ public class Camada {
     Answer a = eng == null ? null : eng.serveChallenge(ctx);
     if (a == null) {
       if (ctx != null && ctx.signalled()) {
-        res.setHeader("Cache-Control", "no-store");
+        for (String n : NO_STORE_HEADERS) {
+          res.setHeader(n, "no-store");
+        }
         res.setHeader("X-Camada-Challenge", "1");
       }
       return false;
