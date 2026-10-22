@@ -170,7 +170,7 @@ run for, before the filter's first request, they are silent no-ops rather than a
    decided, `x-block-rule`; its event ships with `blk` (and `rl`). A `warn` rule passes and stamps
    `wrn`; a `skip` rule passes with nothing stamped. Cold (no snapshot yet) passes: fail open.
 4. Challenge: a `challenge` verdict gets the self-contained proof-of-work page (a non-HTML request
-   passes to the app with `x-camada-challenge: 1`, `cache-control: no-store` and a `chs: 1` event). The page sends its own `Content-Security-Policy`, which allows only its
+   passes to the app with `x-camada-challenge: 1`, `no-store` on `cache-control` and the CDN cache headers, and a `chs: 1` event). The page sends its own `Content-Security-Policy`, which allows only its
    inline script and style by hash, in place of any CSP the app or an earlier filter set (a
    `Content-Security-Policy-Report-Only` one is overwritten with the same policy), so a strict
    app-wide policy cannot block the solver; `POST /__camada/challenge` verifies the solution, sets
