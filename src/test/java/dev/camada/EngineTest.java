@@ -27,6 +27,7 @@ import dev.camada.challenge.ChallengeTest;
 import dev.camada.snapshot.Matcher.MatchInput;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
@@ -441,6 +442,38 @@ class EngineTest {
       assertEquals("1x1", row.get("scr"));
       assertEquals("r-1", row.get("rid"));
       assertEquals("@camada/browser/0.2.0", row.get("sdk"));
+    }
+
+    @Test
+    void stripsSdkAttestedKeysAVisitorPutsInTheBeaconBody() {
+      hops1(analyst);
+      Host h = new Host();
+      String[] keys = {
+        "tlsx", "ja4", "asn", "cc", "sid", "ns", "st", "dur", "rt", "blk", "rl", "wrn", "chs", "ch",
+        "et", "uid"
+      };
+      Map<String, Object> body = new LinkedHashMap<>(Map.of("rid", "r-1", "tz", "UTC"));
+      for (String k : keys) {
+        body.put(k, "forged");
+      }
+      Reply fp =
+          h.call(
+              new Call("POST", "/_cam/fp")
+                  .header("x-forwarded-for", "198.18.0.5")
+                  .header("content-type", "application/json")
+                  .body(Json.stringify(body)));
+      assertEquals(204, fp.status());
+      List<Map<String, Object>> evs = h.events();
+      assertEquals(1, evs.size());
+      Map<String, Object> row = evs.get(0);
+      assertEquals(1L, num(row, "sig"));
+      assertEquals("r-1", row.get("rid"));
+      assertEquals("UTC", row.get("tz"));
+      assertEquals("198.18.0.5", row.get("ip"));
+      assertEquals("sdk-java", row.get("tap"));
+      for (String k : keys) {
+        assertFalse(row.containsKey(k), k);
+      }
     }
 
     @Test
