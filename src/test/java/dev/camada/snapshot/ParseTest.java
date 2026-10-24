@@ -249,6 +249,28 @@ class ParseTest {
     assertEquals("/api/\\{id}", Parser.jsToJava("/api/{id}"));
     assertEquals("a\\{b a{2,3} [{,3}]", Parser.jsToJava("a{b a{2,3} [{,3}]"));
     assertEquals("a\\{b[{]", Parser.jsToJava("a\\{b[{]"));
+    // a [ or && inside a class is a literal in JS; Java reads a union / an intersection
+    assertEquals("^[a\\[b]]\\z", Parser.jsToJava("^[a[b]]$"));
+    assertEquals("[a\\&&b]", Parser.jsToJava("[a&&b]")); // one escaped & ends the intersection
+    assertEquals("[\\&&]", Parser.jsToJava("[&&]"));
+    // the vectors below match what node's new RegExp matches
+    for (Object[] c :
+        new Object[][] {
+          {"^[a[b]]$", "a]", true},
+          {"^[a[b]]$", "a", false},
+          {"^[a[b]]$", "b]", true},
+          {"^[a[b]]$", "[]", true},
+          {"[a&&b]", "&", true},
+          {"[a&&b]", "a", true},
+          {"[a&&b]", "c", false},
+          {"^[&&]$", "&", true},
+          {"^[&&]$", "&&", false},
+          {"^[a&b]$", "&", true}
+        }) {
+      Pattern p = Parser.compileRegex((String) c[0]);
+      assertNotNull(p, (String) c[0]);
+      assertEquals(c[2], p.matcher((String) c[1]).find(), c[0] + " vs " + c[1]);
+    }
   }
 
   private static String rule(String id, String action, String f, String name, String rx) {

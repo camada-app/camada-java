@@ -330,7 +330,8 @@ public final class Parser {
    * JS's does not), and a named group {@code (?<name>} -> a plain {@code (} with {@code \k<name>}
    * -> its number (JS admits {@code _} and {@code $} in a name, Java only letters and digits;
    * nothing in the SDK reads the names), and a left brace that opens no {@code {n}}, {@code {n,}}
-   * or {@code {n,m}} quantifier -> escaped (JS reads it as a literal, Java throws). Anything else
+   * or {@code {n,m}} quantifier -> escaped (JS reads it as a literal, Java throws), and a {@code [}
+   * or {@code &&} inside a class -> escaped (Java reads a union / an intersection). Anything else
    * the engine rejects still fails open.
    */
   static String jsToJava(String pattern) {
@@ -364,6 +365,12 @@ public final class Parser {
         continue;
       }
       if (inClass) {
+        // JS reads a [ or && inside a class as literals; Java reads a union / an intersection
+        if (ch == '[' || (ch == '&' && i + 1 < n && pattern.charAt(i + 1) == '&')) {
+          out.append('\\').append(ch);
+          i++;
+          continue;
+        }
         inClass = ch != ']';
       } else if (ch == '[') {
         if (pattern.startsWith("[^]", i)) {
