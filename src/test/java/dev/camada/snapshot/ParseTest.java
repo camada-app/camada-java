@@ -231,6 +231,9 @@ class ParseTest {
         Parser.jsToJava(
             "^(a)(?:x)(?<n>\\d)\\k<n>\\k<m>[(?<n>]")); // \k<m>: no such group, left alone
     assertNull(Parser.compileRegex("(?<user_id>a)\\k<nope>")); // an unknown name still fails open
+    assertNull(Parser.compileRegex("(a\\")); // a trailing backslash must not escape the seed
+    assertNull(Parser.compileRegex("a\\"));
+    assertNotNull(Parser.compileRegex("a\\\\")); // an escaped backslash is fine
     // a { that opens no valid quantifier is a literal in JS; Java would throw
     for (String[] c :
         new String[][] {

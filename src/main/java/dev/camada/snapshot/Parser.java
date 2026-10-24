@@ -361,7 +361,15 @@ public final class Parser {
       // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
       // where i is off). Java's u also folds a few letters JS's non-u /i does not (U+212A to k,
       // U+017F to s, U+0130 and U+0131 to i)
-      return Pattern.compile(jsToJava(pattern) + SEED, flags | Pattern.UNICODE_CASE);
+      String js = jsToJava(pattern);
+      int bs = 0;
+      while (bs < js.length() && js.charAt(js.length() - 1 - bs) == '\\') {
+        bs++;
+      }
+      if (bs % 2 == 1) { // a trailing \ (JS rejects it) would escape SEED's ( and match anything
+        throw new PatternSyntaxException("trailing backslash", pattern, pattern.length());
+      }
+      return Pattern.compile(js + SEED, flags | Pattern.UNICODE_CASE);
     } catch (RuntimeException | StackOverflowError e) {
       String why =
           e instanceof PatternSyntaxException pse
