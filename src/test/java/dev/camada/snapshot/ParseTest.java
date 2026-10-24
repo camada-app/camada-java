@@ -702,7 +702,7 @@ class ParseTest {
     for (String[] v : vec) {
       boolean want = Boolean.parseBoolean(v[2]);
       String msg = v[0] + " on " + v[1];
-      assertEquals(want, Parser.find(Parser.compileRule(v[0], 0), v[1], false), msg);
+      assertEquals(want, Parser.compileRule(v[0], 0).find(v[1], false), msg);
       assertEquals(want, Parser.find(Parser.compileRegex(v[0]), v[1]), msg);
     }
     Parser.Regex foo = Parser.compileRule("\\bfoo", 0);
@@ -714,15 +714,16 @@ class ParseTest {
     assertNull(Parser.compileRule("[\\b]", 0).bounds());
     List<String> inputs = new ArrayList<>(List.of("", "\uD83D\uDE00a", "a\uD83D\uDE00"));
     String alphabet = "a_- \u00E9K\u017F";
+    List<String> prev = List.of("");
     for (int len = 1; len <= 3; len++) {
-      int total = (int) Math.pow(alphabet.length(), len);
-      for (int k = 0; k < total; k++) {
-        StringBuilder sb = new StringBuilder();
-        for (int j = 0, r = k; j < len; j++, r /= alphabet.length()) {
-          sb.append(alphabet.charAt(r % alphabet.length()));
+      List<String> next = new ArrayList<>();
+      for (String base : prev) {
+        for (char c : alphabet.toCharArray()) {
+          next.add(base + c);
         }
-        inputs.add(sb.toString());
       }
+      inputs.addAll(next);
+      prev = next;
     }
     for (String p : new String[] {"a\\b", "\\b\u00E9", "\\B", "\\bfoo\\b", "x\\B.", "(?<=\\ba)b"}) {
       for (int flags : new int[] {0, Pattern.CASE_INSENSITIVE}) {

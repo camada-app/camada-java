@@ -110,7 +110,7 @@ public final class Matcher {
       return true;
     }
     for (Parser.Regex rx : regex) {
-      if (Parser.find(rx, p, false)) {
+      if (rx.find(p, false)) {
         return true;
       }
     }

@@ -226,7 +226,7 @@ public final class Parser {
    * a deny rule hits, a skip rule misses.
    */
   private static boolean capped(Regex rx, String v, boolean deny) {
-    return v.length() > MAX_MATCH_INPUT ? deny : find(rx, v, deny);
+    return v.length() > MAX_MATCH_INPUT ? deny : rx.find(v, deny);
   }
 
   // U+0300 is the first non-spacing mark (Mn), so a char below it is never one
@@ -238,12 +238,6 @@ public final class Parser {
       }
     }
     return false;
-  }
-
-  /** Runs Java's own \b \B where {@code rx} has them and the input has no non-spacing mark. */
-  static boolean find(Regex rx, String input, boolean onFailure) {
-    Pattern p = rx.bounds() != null && !hasMark(input) ? rx.bounds() : rx.exact();
-    return find(p, input, onFailure);
   }
 
   /** Deletes every [\x00-\x1f\x7f] char: no engine then disagrees about a trailing newline. */
@@ -274,7 +268,8 @@ public final class Parser {
    * A pattern this runtime cannot run against this input answers {@code false} and never throws:
    * java.util.regex recurses per group iteration, so a nested quantifier against a long path or
    * user agent overflows the request thread's stack where JS and Python's engines would not. The
-   * legacy path list uses this; a v5 rule uses {@link #find(Pattern, String, boolean)}.
+   * legacy path list uses this; a v5 rule goes through {@link Regex#find}. Both end in {@link
+   * #find(Pattern, String, boolean)}, which this answers {@code false} on failure.
    */
   public static boolean find(Pattern rx, String input) {
     return find(rx, input, false);
@@ -377,7 +372,7 @@ public final class Parser {
   /** As {@link #compileRegex(String)} with flags: a path regex runs CASE_INSENSITIVE (§D3). */
   public static Pattern compileRegex(String pattern, int flags) {
     try {
-      return compile(pattern, flags, false);
+      return compileJava(jsToJava(pattern), pattern, flags);
     } catch (RuntimeException | StackOverflowError e) {
       String why =
           e instanceof PatternSyntaxException pse
@@ -397,11 +392,10 @@ public final class Parser {
     }
   }
 
-  private static Pattern compile(String pattern, int flags, boolean nativeBounds) {
+  private static Pattern compileJava(String js, String pattern, int flags) {
     // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
     // where i is off). Java's u also folds a few letters JS's non-u /i does not (U+212A to k,
     // U+017F to s, U+0130 and U+0131 to i)
-    String js = jsToJava(pattern, nativeBounds);
     int bs = 0;
     while (bs < js.length() && js.charAt(js.length() - 1 - bs) == '\\') {
       bs++;
@@ -417,10 +411,31 @@ public final class Parser {
 
   /**
    * A compiled rule regex. {@code exact} always reads as JS; {@code bounds} is null, or the same
-   * pattern with Java's own \b \B (JDK 19+, when the pattern has one outside a class), exact on any
-   * input with no non-spacing mark.
+   * pattern with Java's own \b \B (JDK 19+, when the pattern has one outside a class), exact only
+   * on input with no non-spacing mark: so only {@link #find} picks it.
    */
-  public record Regex(Pattern exact, Pattern bounds) {}
+  public static final class Regex {
+    private final Pattern exact;
+    private final Pattern bounds;
+
+    Regex(Pattern exact, Pattern bounds) {
+      this.exact = exact;
+      this.bounds = bounds;
+    }
+
+    Pattern exact() {
+      return exact;
+    }
+
+    Pattern bounds() {
+      return bounds;
+    }
+
+    /** As {@link Parser#find(Pattern, String, boolean)}, on the pattern that reads as JS here. */
+    boolean find(String input, boolean onFailure) {
+      return Parser.find(bounds != null && !hasMark(input) ? bounds : exact, input, onFailure);
+    }
+  }
 
   /** {@code pattern} as a {@link Regex}; null where {@link #compileRegex} is. */
   static Regex compileRule(String pattern, int flags) {
@@ -429,11 +444,14 @@ public final class Parser {
       return null;
     }
     Pattern bounds = null;
-    if (NATIVE_BOUNDS && !jsToJava(pattern, true).equals(jsToJava(pattern, false))) {
-      try {
-        bounds = compile(pattern, flags, true); // the exact one compiled, so this logs nothing
-      } catch (RuntimeException | StackOverflowError e) {
-        bounds = null;
+    if (NATIVE_BOUNDS) {
+      String nb = jsToJava(pattern, true);
+      if (!(nb + SEED).equals(exact.pattern())) {
+        try {
+          bounds = compileJava(nb, pattern, flags); // the exact one compiled, so this logs nothing
+        } catch (RuntimeException | StackOverflowError e) {
+          // no twin: the exact one runs
+        }
       }
     }
     return new Regex(exact, bounds);
@@ -512,6 +530,8 @@ public final class Parser {
   }
 
   static String jsToJava(String pattern, boolean nativeBounds) {
+    String wb = nativeBounds ? "\\b" : WORD_BOUNDARY;
+    String nwb = nativeBounds ? "\\B" : NON_WORD_BOUNDARY;
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
@@ -570,11 +590,8 @@ public final class Parser {
         String sub =
             switch (nxt) {
               case 'v' -> "\\x0B";
-              case 'b' -> inClass ? "\\x08" : nativeBounds ? "\\b" : WORD_BOUNDARY;
-              case 'B' ->
-                  inClass
-                      ? null
-                      : nativeBounds ? "\\B" : NON_WORD_BOUNDARY; // [\B] is an identity escape
+              case 'b' -> inClass ? "\\x08" : wb;
+              case 'B' -> inClass ? null : nwb; // [\B] is an identity escape
               case 's' -> JS_SPACE;
               case 'S' -> JS_NON_SPACE;
               default -> null;
@@ -1232,7 +1249,7 @@ public final class Parser {
     String first = values.isEmpty() ? "" : values.get(0);
     if (op.equals("matches")) {
       Regex rx = compileRule(first, Pattern.CASE_INSENSITIVE);
-      return p -> rx != null && (p.length() > MAX_MATCH_INPUT ? deny : find(rx, p, deny));
+      return p -> rx != null && (p.length() > MAX_MATCH_INPUT ? deny : rx.find(p, deny));
     }
     if (op.equals("starts_with")) {
       String key = first.endsWith("/") ? Paths.dirKey(first) : Paths.canonPath(first);
