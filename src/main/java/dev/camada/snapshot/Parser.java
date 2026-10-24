@@ -298,7 +298,9 @@ public final class Parser {
    * letter differently), a bare {@code $} -> {@code \z} (Java's $ also accepts a final newline;
    * JS's does not), and a named group {@code (?<name>} -> a plain {@code (} with {@code \k<name>}
    * -> its number (JS admits {@code _} and {@code $} in a name, Java only letters and digits;
-   * nothing in the SDK reads the names). Anything else the engine rejects still fails open.
+   * nothing in the SDK reads the names), and a left brace that opens no {@code {n}}, {@code {n,}}
+   * or {@code {n,m}} quantifier -> escaped (JS reads it as a literal, Java throws). Anything else
+   * the engine rejects still fails open.
    */
   static String jsToJava(String pattern) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
@@ -339,6 +341,16 @@ public final class Parser {
           continue;
         }
         inClass = true;
+      } else if (ch == '{') {
+        int end = quantifierEnd(pattern, i);
+        if (end < 0) {
+          out.append("\\{");
+          i++;
+        } else {
+          out.append(pattern, i, end);
+          i = end;
+        }
+        continue;
       } else if (ch == '$') {
         out.append("\\z");
         i++;
@@ -364,6 +376,26 @@ public final class Parser {
       i++;
     }
     return out.toString();
+  }
+
+  /** The index just past a {@code {n}}, {@code {n,}} or {@code {n,m}} at {@code i}, else -1. */
+  private static int quantifierEnd(String s, int i) {
+    int n = s.length();
+    int j = i + 1;
+    int digits = j;
+    while (j < n && s.charAt(j) >= '0' && s.charAt(j) <= '9') {
+      j++;
+    }
+    if (j == digits) {
+      return -1;
+    }
+    if (j < n && s.charAt(j) == ',') {
+      j++;
+      while (j < n && s.charAt(j) >= '0' && s.charAt(j) <= '9') {
+        j++;
+      }
+    }
+    return j < n && s.charAt(j) == '}' ? j + 1 : -1;
   }
 
   // ---------- custom rules (v5) ----------
