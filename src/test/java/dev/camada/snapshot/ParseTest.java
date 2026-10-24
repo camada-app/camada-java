@@ -394,7 +394,7 @@ class ParseTest {
     js("^..$", e, true);
     js("\\B", "_\uD800_", false);
     js("\\B\\W*", "_\uD800_", false);
-    js("[\\c-\\uDFFF]", "", false);
+    js("[\\c-\\uDFFF]", "\uE000", false);
     js("[\\c-\\uDFFF]", "\\", true);
     js("^[\\c-\\uDFFF]$", "\uD900", true);
     js("^.$", e, false);
