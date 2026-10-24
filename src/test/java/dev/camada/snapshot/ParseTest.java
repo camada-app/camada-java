@@ -336,6 +336,46 @@ class ParseTest {
     assertNull(Parser.compileRegex("a)."));
   }
 
+  @Test
+  void modifierMultilineAndIgnoreCaseAsInJs() {
+    for (String[] c :
+        new String[][] {
+          {"^(?m:a$)", "a\nb"},
+          {"^(?i:é)$", "É"},
+          {"^(?i:É)$", "é"},
+          {"(?m:^b)", "a\nb"},
+          {"(?m:^)$", "a\n"},
+          {"(?m:a$)", "a\r\nb"},
+          {"(?m:^b)", "a\r\nb"},
+          {"(?m:a$)", "a\u2028"},
+          {"(?m:^b)", "a\u2029b"},
+          {"^a(?m:$)", "a\n"},
+          {"^(?m:$)\\n", "\n"},
+          {"(?m:$)(?m:^)", "\n"},
+          {"(?m:x$\\n^y)", "x\ny"},
+          {"^(?i:(é)\\1)$", "éÉ"}
+        }) {
+      js(c[0], c[1], true);
+    }
+    for (String[] c :
+        new String[][] {
+          {"(?m:a$)", "a\u0085b"},
+          {"(?m:^b)", "a\u0085b"},
+          {"^(?m:a(?-m:$))", "a\nb"},
+          {"^(?i-s:é.)$", "É\n"},
+          {"^a$", "a\nb"}
+        }) {
+      js(c[0], c[1], false);
+    }
+    assertEquals("(?ui:é)", Parser.jsToJava("(?i:é)"));
+    assertEquals("(?ui-s:a)", Parser.jsToJava("(?i-s:a)"));
+    assertEquals("(?-i:a)", Parser.jsToJava("(?-i:a)"));
+    assertEquals(
+        "(?m:(?<![^\\n\\r\\u2028\\u2029])a(?![^\\n\\r\\u2028\\u2029]))",
+        Parser.jsToJava("(?m:^a$)"));
+    assertEquals("^a\\z", Parser.jsToJava("^a$"));
+  }
+
   // pattern, input, whether JS's new RegExp(pattern).test(input) is true (checked with node)
   private static void js(String p, String in, boolean want) {
     Pattern c = Parser.compileRegex(p);
