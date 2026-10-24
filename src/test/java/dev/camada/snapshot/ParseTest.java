@@ -367,11 +367,9 @@ class ParseTest {
         }) {
       js(c[0], c[1], false);
     }
-    assertEquals("(?ui:é)", Parser.jsToJava("(?i:é)"));
-    assertEquals("(?ui-s:a)", Parser.jsToJava("(?i-s:a)"));
-    assertEquals("(?-i:a)", Parser.jsToJava("(?-i:a)"));
+    assertEquals("(?i:é)", Parser.jsToJava("(?i:é)"));
     assertEquals(
-        "(?m:(?<![^\\n\\r\\u2028\\u2029])a(?![^\\n\\r\\u2028\\u2029]))",
+        "(?m:(?<![^\\n\\r\\u2028-\\u2029])a(?![^\\n\\r\\u2028-\\u2029]))",
         Parser.jsToJava("(?m:^a$)"));
     assertEquals("^a\\z", Parser.jsToJava("^a$"));
   }

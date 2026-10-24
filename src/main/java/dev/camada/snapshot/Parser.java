@@ -323,9 +323,9 @@ public final class Parser {
   /** As {@link #compileRegex(String)} with flags: a path regex runs CASE_INSENSITIVE (§D3). */
   public static Pattern compileRegex(String pattern, int flags) {
     try {
-      // JS /i folds non-ASCII letters too; Java's CASE_INSENSITIVE alone folds only ASCII
-      int f = (flags & Pattern.CASE_INSENSITIVE) != 0 ? flags | Pattern.UNICODE_CASE : flags;
-      return Pattern.compile(jsToJava(pattern), f);
+      // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
+      // where i is off)
+      return Pattern.compile(jsToJava(pattern), flags | Pattern.UNICODE_CASE);
     } catch (RuntimeException | StackOverflowError e) {
       String why =
           e instanceof PatternSyntaxException pse
@@ -349,6 +349,8 @@ public final class Parser {
   // property lookup per char, where a list of the members is tested one by one.
   private static final String JS_SPACE = "[\\p{IsWhite_Space}\\uFEFF&&[^\\x85]]";
   private static final String JS_NON_SPACE = "[^" + JS_SPACE.substring(1);
+  // what JS's . matches: not \n \r U+2028 U+2029; an (?m: ^ or $ needs none of it beside it
+  private static final String JS_NON_TERMINATOR = "[^\\n\\r\\u2028-\\u2029]";
   // \b over Java's ASCII \w (its own \b counts non-ASCII letters as word chars)
   private static final String WORD_BOUNDARY = "(?:(?<=\\w)(?!\\w)|(?<!\\w)(?=\\w))";
   private static final String NON_WORD_BOUNDARY = "(?:(?<=\\w)(?=\\w)|(?<!\\w)(?!\\w))";
@@ -358,21 +360,20 @@ public final class Parser {
    * char) -> {@code [\s\S]}, {@code \cX} -> the control character (Java's own \c reads a lower-case
    * letter differently), a bare {@code $} -> {@code \z} (Java's $ also accepts a final newline;
    * JS's does not; inside {@code (?m:} a {@code ^} and {@code $} -> lookarounds on \n \r U+2028
-   * U+2029, and {@code (?i:} -> {@code (?ui:} so Java folds Unicode as JS does), and a named group
-   * {@code (?<name>} -> a plain {@code (} (JS admits {@code _} and {@code $} in a name, Java only
-   * letters and digits; nothing in the SDK reads the names), {@code []} -> {@code (?!)} (never
-   * matches), a JS identity escape ({@code \p}, {@code \Q}, {@code \k} with no named group, an x or
-   * u escape without its hex digits) -> the bare letter, a {@code \c} with no letter -> a literal
-   * backslash and {@code c}, a left brace that opens no {@code {n}}, {@code {n,}} or {@code {n,m}}
-   * quantifier -> escaped (JS reads it as a literal, Java throws), a {@code .} -> {@code
-   * [^\n\r\u2028-\u2029]} (JS's also matches U+0085, Java's does not; kept as is inside an {@code
-   * (?s:} group), and a {@code [} or {@code &&} inside a class -> escaped (Java reads a union / an
-   * intersection), {@code \v} -> {@code \x0B}, {@code [\b]} -> backspace, {@code \s \S} -> JS's
-   * whitespace set (a nested class, so a range next to it stays valid), {@code \b \B} outside a
-   * class -> lookarounds on Java's ASCII {@code \w}, and a decimal escape: a back-reference (or
-   * {@code \k<name>}) -> what reads the group as JS does, see below; anything else -> an Annex B
-   * legacy octal {@code \xHH} (or the bare digit for 8 and 9). Anything else the engine rejects
-   * still fails open.
+   * U+2029), and a named group {@code (?<name>} -> a plain {@code (} (JS admits {@code _} and
+   * {@code $} in a name, Java only letters and digits; nothing in the SDK reads the names), {@code
+   * []} -> {@code (?!)} (never matches), a JS identity escape ({@code \p}, {@code \Q}, {@code \k}
+   * with no named group, an x or u escape without its hex digits) -> the bare letter, a {@code \c}
+   * with no letter -> a literal backslash and {@code c}, a left brace that opens no {@code {n}},
+   * {@code {n,}} or {@code {n,m}} quantifier -> escaped (JS reads it as a literal, Java throws), a
+   * {@code .} -> {@code [^\n\r\u2028-\u2029]} (JS's also matches U+0085, Java's does not; kept as
+   * is inside an {@code (?s:} group), and a {@code [} or {@code &&} inside a class -> escaped (Java
+   * reads a union / an intersection), {@code \v} -> {@code \x0B}, {@code [\b]} -> backspace, {@code
+   * \s \S} -> JS's whitespace set (a nested class, so a range next to it stays valid), {@code \b
+   * \B} outside a class -> lookarounds on Java's ASCII {@code \w}, and a decimal escape: a
+   * back-reference (or {@code \k<name>}) -> what reads the group as JS does, see below; anything
+   * else -> an Annex B legacy octal {@code \xHH} (or the bare digit for 8 and 9). Anything else the
+   * engine rejects still fails open.
    *
    * <p>A back-reference is emitted as a numeric Java reference to the group's number in the output
    * (Java rejects a named reference to a group not yet defined in the text, but accepts a numeric
@@ -510,16 +511,16 @@ public final class Parser {
         }
         continue;
       } else if (ch == '$') {
-        out.append(cur.multiline ? "(?![^\\n\\r\\u2028\\u2029])" : "\\z");
+        out.append(cur.multiline ? "(?!" + JS_NON_TERMINATOR + ")" : "\\z");
         i++;
         continue;
       } else if (ch == '^' && cur.multiline) {
-        out.append("(?<![^\\n\\r\\u2028\\u2029])");
+        out.append("(?<!" + JS_NON_TERMINATOR + ")");
         i++;
         continue;
       } else if (ch == '.') {
         // JS's . excludes only \n \r U+2028 U+2029; Java's also excludes U+0085
-        out.append(cur.dotAll ? "." : "[^\\n\\r\\u2028-\\u2029]");
+        out.append(cur.dotAll ? "." : JS_NON_TERMINATOR);
         i++;
         continue;
       } else if (ch == ')') {
@@ -534,11 +535,6 @@ public final class Parser {
         }
       } else if (ch == '(') {
         cur = refs.groups.get(i);
-        if (cur.cap == 0 && modifier(pattern, i, 'i', false)) {
-          out.append("(?u"); // Java folds ASCII only unless u is on
-          i += 2;
-          continue;
-        }
         if (cur.cap > 0) {
           out.append(cur.marked ? "(?:(" : "(");
           int close = nameEnd(pattern, i);
