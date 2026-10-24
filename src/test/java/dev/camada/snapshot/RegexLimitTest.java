@@ -53,9 +53,7 @@ class RegexLimitTest {
   }
 
   static Matcher build(List<Map<String, Object>> rules) {
-    Map<String, Object> meta = new HashMap<>(Fixtures.readMeta("blk5/v5-empty.meta.json"));
-    meta.put("rules", rules);
-    return new Matcher(Parser.parse(Fixtures.readBin("blk5/v5-empty.bin"), meta));
+    return ParseTest.rulesSnapshot(Json.stringify(rules));
   }
 
   static boolean hit(Map<String, Object> rule, Map<String, Object> input) {
