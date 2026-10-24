@@ -243,6 +243,12 @@ class ParseTest {
       Pattern pi = Parser.compileRegex(c[0], Pattern.CASE_INSENSITIVE); // the path flags
       assertTrue(pi.matcher(c[1].toUpperCase(Locale.ROOT)).matches(), c[0]);
     }
+    // non-ASCII case folding under /i, and an astral char in a class, as JS reads them
+    assertTrue(Parser.compileRegex("^é$", Pattern.CASE_INSENSITIVE).matcher("É").matches());
+    assertFalse(Parser.compileRegex("^é$").matcher("É").matches());
+    assertFalse(Parser.compileRegex("^[😀]$").matcher("😀").matches());
+    assertTrue(Parser.compileRegex("^😀$").matcher("😀").matches());
+    assertTrue(Parser.compileRegex("^[a😀]$").matcher("a").matches());
     assertEquals("a\\{}", Parser.jsToJava("a{}"));
     assertEquals("x\\{,3", Parser.jsToJava("x{,3"));
     assertEquals("a\\{x}", Parser.jsToJava("a{x}"));
