@@ -216,10 +216,7 @@ class ParseTest {
     assertEquals("end", m3.match(MatchInput.ip(null).withUa("x")).rule());
     assertEquals("end", m3.match(MatchInput.ip(null).withUa("x\n")).rule()); // \n is stripped first
     assertEquals("^a[\\s\\S]b\\x0A\\z", Parser.jsToJava("^a[^]b\\cJ$"));
-    // each user lookbehind opens with an empty group holding U+F0000 (code-point length counting)
-    assertEquals(
-        "[$]\\$a(b)(?<=(?:\uDB80\uDC00){0}c)(?<!(?:\uDB80\uDC00){0}d)",
-        Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)(?<!d)"));
+    assertEquals("[$]\\$a(b)(?<=c)(?<!d)", Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)(?<!d)"));
     assertEquals("a\\x0A", Parser.jsToJava("a\\cj")); // JS reads \cj as \cJ; Java would not
     // JS admits _ and $ in a group name; Java only letters and digits, so names are dropped and a
     // \k<name> back-reference reads a generated name (nothing in the SDK reads the names)
@@ -395,6 +392,11 @@ class ParseTest {
   void regexesReadCodeUnitsAsJsDoes() {
     String e = "\uD83D\uDE00"; // U+1F600
     js("^..$", e, true);
+    js("\\B", "_\uD800_", false);
+    js("\\B\\W*", "_\uD800_", false);
+    js("[\\c-\\uDFFF]", "", false);
+    js("[\\c-\\uDFFF]", "\\", true);
+    js("^[\\c-\\uDFFF]$", "\uD900", true);
     js("^.$", e, false);
     js("^.$", "\uD83D", true);
     js("evil..payload", "evil" + e + "payload", true);
