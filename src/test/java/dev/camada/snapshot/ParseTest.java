@@ -430,6 +430,10 @@ class ParseTest {
     js("^[^a\\S]$", "b", false);
     js("^[\\S]$", " ", false);
     js("^[^]$", " ", true);
+    js("^\\s$", "\u2028", true);
+    js("^\\S$", "\u2028", false);
+    js("^[\\S]$", "\u2028", false);
+    js("^[^]$", "\u2028", true);
     js("a\\b", "aé", true);
     js("a\\B", "aé", false);
     js("\\bé", "é", false);
@@ -441,9 +445,20 @@ class ParseTest {
     jsi("^a\\b", "A\u212A", true); // K is U+212A (Kelvin sign): JS /i keeps it a non-word char
     jsi("^a\\B", "A\u212A", false);
     jsi("^k\\b", "k\u017F", true); // U+017F long s is not a word char either
-    assertEquals(
-        "[\\t\\n\\x0B\\f\\r\\x20\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]",
-        Parser.jsToJava("\\s"));
+    // every BMP char: \s is exactly JS's set (node, looping 0..0xFFFF), \S its complement
+    String jsSpace =
+        "\t\n\u000B\f\r \u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008"
+            + "\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF";
+    Pattern s = Parser.compileRegex("^\\s$");
+    Pattern ns = Parser.compileRegex("^[^\\S]$", Pattern.CASE_INSENSITIVE);
+    for (char c = 0; c < 0xFFFF; c++) {
+      if (!Character.isSurrogate(c)) {
+        String in = String.valueOf(c);
+        boolean want = jsSpace.indexOf(c) >= 0;
+        assertEquals(want, s.matcher(in).find(), "\\s on U+" + Integer.toHexString(c));
+        assertEquals(want, ns.matcher(in).find(), "[^\\S] on U+" + Integer.toHexString(c));
+      }
+    }
     assertEquals("(?:(?<=\\w)(?!\\w)|(?<!\\w)(?=\\w))", Parser.jsToJava("\\b"));
   }
 

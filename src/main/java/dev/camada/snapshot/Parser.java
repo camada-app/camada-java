@@ -329,9 +329,9 @@ public final class Parser {
     }
   }
 
-  // JS's \s set (U+180E and U+0085 are not in it); Java's \s is ASCII-only
-  private static final String JS_SPACE =
-      "[\\t\\n\\x0B\\f\\r\\x20\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]";
+  // JS's \s is Unicode White_Space without U+0085, plus U+FEFF; Java's \s is ASCII-only. One
+  // property lookup per char, where a list of the members is tested one by one.
+  private static final String JS_SPACE = "[\\p{IsWhite_Space}\\uFEFF&&[^\\x85]]";
   private static final String JS_NON_SPACE = "[^" + JS_SPACE.substring(1);
   // \b over Java's ASCII \w (its own \b counts non-ASCII letters as word chars)
   private static final String WORD_BOUNDARY = "(?:(?<=\\w)(?!\\w)|(?<!\\w)(?=\\w))";
@@ -363,10 +363,8 @@ public final class Parser {
     Map<String, Integer> named = new HashMap<>();
     int total = scanGroups(pattern, named);
     boolean namedGroups = !named.isEmpty();
-    boolean[] closed = new boolean[total + 1]; // closed[n]: capture group n has been closed
     ArrayDeque<Integer> open = new ArrayDeque<>(); // n > 0 capture, 0 other, -1 lookbehind
     int groups = 0; // capturing groups opened so far
-    int lookbehind = 0; // open lookbehinds
     int i = 0;
     while (i < n) {
       char ch = pattern.charAt(i);
@@ -388,40 +386,34 @@ public final class Parser {
           int close = pattern.indexOf('>', i + 3);
           Integer num = close < 0 ? null : named.get(pattern.substring(i + 3, close));
           if (num != null) {
-            out.append(backRef(num, closed, lookbehind));
+            out.append(backRef(num, groups, open));
             i = close + 1;
             continue;
           }
         }
-        if (nxt == 'v') {
-          out.append("\\x0B");
-          i += 2;
-          continue;
-        }
-        if (nxt == 'b' && inClass) {
-          out.append("\\x08");
-          i += 2;
-          continue;
-        }
-        if ((nxt == 'b' || nxt == 'B') && !inClass) {
-          out.append(nxt == 'b' ? WORD_BOUNDARY : NON_WORD_BOUNDARY);
-          i += 2;
-          continue;
-        }
-        if (nxt == 's' || nxt == 'S') {
-          out.append(nxt == 's' ? JS_SPACE : JS_NON_SPACE);
+        String sub =
+            switch (nxt) {
+              case 'v' -> "\\x0B";
+              case 'b' -> inClass ? "\\x08" : WORD_BOUNDARY;
+              case 'B' -> inClass ? null : NON_WORD_BOUNDARY; // [\B] is an identity escape
+              case 's' -> JS_SPACE;
+              case 'S' -> JS_NON_SPACE;
+              default -> null;
+            };
+        if (sub != null) {
+          out.append(sub);
           i += 2;
           continue;
         }
         if (nxt >= '0' && nxt <= '9') {
           int end = i + 1;
-          while (end < n && Character.isDigit(pattern.charAt(end)) && pattern.charAt(end) < 128) {
+          while (end < n && pattern.charAt(end) >= '0' && pattern.charAt(end) <= '9') {
             end++;
           }
           if (nxt != '0' && !inClass && end - i - 1 <= 9) {
             int num = Integer.parseInt(pattern.substring(i + 1, end));
             if (num <= total) {
-              out.append(backRef(num, closed, lookbehind));
+              out.append(backRef(num, groups, open));
               i = end;
               continue;
             }
@@ -495,19 +487,11 @@ public final class Parser {
         i++;
         continue;
       } else if (ch == ')') {
-        Integer top = open.poll();
-        if (top != null && top > 0) {
-          closed[top] = true;
-        } else if (top != null && top < 0) {
-          lookbehind--;
-        }
+        open.poll();
       } else if (ch == '(') {
-        boolean plain = i + 1 >= n || pattern.charAt(i + 1) != '?';
         boolean look = pattern.startsWith("?<=", i + 1) || pattern.startsWith("?<!", i + 1);
-        int close =
-            !plain && !look && pattern.startsWith("?<", i + 1) ? pattern.indexOf('>', i + 3) : -1;
-        open.push(plain || close > 0 ? ++groups : look ? -1 : 0);
-        lookbehind += look ? 1 : 0;
+        int close = nameEnd(pattern, i);
+        open.push(isCapture(pattern, i) ? ++groups : look ? -1 : 0);
         if (close > 0) {
           out.append('(');
           i = close + 1;
@@ -542,9 +526,25 @@ public final class Parser {
     return "dDwWfnrt".indexOf(c) >= 0;
   }
 
-  /** A back-reference JS reads as empty unless its group has closed (Java would never match). */
-  private static String backRef(int num, boolean[] closed, int lookbehind) {
-    return closed[num] || lookbehind > 0 ? "(?:\\" + num + ")" : "(?:)";
+  /**
+   * A back-reference JS reads as empty unless its group has closed (Java would never match). Inside
+   * a lookbehind it stays: JS matches those right to left, and Java rejects it anyway (fail open).
+   */
+  private static String backRef(int num, int groups, ArrayDeque<Integer> open) {
+    boolean closed = num <= groups && !open.contains(num);
+    return closed || open.contains(-1) ? "(?:\\" + num + ")" : "(?:)";
+  }
+
+  /** For a ( at i: whether it opens a capturing group, plain or named. */
+  private static boolean isCapture(String p, int i) {
+    return i + 1 >= p.length() || p.charAt(i + 1) != '?' || nameEnd(p, i) > 0;
+  }
+
+  /** For a ( at i: the index of the > that closes a {@code (?<name>}, else -1. */
+  private static int nameEnd(String p, int i) {
+    boolean named =
+        p.startsWith("?<", i + 1) && !p.startsWith("?<=", i + 1) && !p.startsWith("?<!", i + 1);
+    return named ? p.indexOf('>', i + 3) : -1;
   }
 
   /** The capturing-group count; fills {@code names} (name to number, first definition wins). */
@@ -559,17 +559,9 @@ public final class Parser {
         inClass = ch != ']';
       } else if (ch == '[') {
         inClass = true;
-      } else if (ch == '(') {
-        boolean plain = i + 1 >= p.length() || p.charAt(i + 1) != '?';
-        boolean named =
-            p.startsWith("?<", i + 1)
-                && i + 3 < p.length()
-                && p.charAt(i + 3) != '='
-                && p.charAt(i + 3) != '!';
-        if (plain || named) {
-          count++;
-        }
-        int close = named ? p.indexOf('>', i + 3) : -1;
+      } else if (ch == '(' && isCapture(p, i)) {
+        count++;
+        int close = nameEnd(p, i);
         if (close > 0) {
           names.putIfAbsent(p.substring(i + 3, close), count);
         }
