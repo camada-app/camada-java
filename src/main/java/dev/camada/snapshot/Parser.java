@@ -323,9 +323,10 @@ public final class Parser {
   /** As {@link #compileRegex(String)} with flags: a path regex runs CASE_INSENSITIVE (§D3). */
   public static Pattern compileRegex(String pattern, int flags) {
     try {
-      // JS /i folds non-ASCII letters too; Java's CASE_INSENSITIVE alone folds only ASCII
-      int f = (flags & Pattern.CASE_INSENSITIVE) != 0 ? flags | Pattern.UNICODE_CASE : flags;
-      return Pattern.compile(jsToJava(pattern), f);
+      // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
+      // where i is off). Java's u also folds a few letters JS's non-u /i does not (U+212A to k,
+      // U+017F to s, U+0130 and U+0131 to i)
+      return Pattern.compile(jsToJava(pattern), flags | Pattern.UNICODE_CASE);
     } catch (RuntimeException | StackOverflowError e) {
       String why =
           e instanceof PatternSyntaxException pse
@@ -349,6 +350,8 @@ public final class Parser {
   // property lookup per char, where a list of the members is tested one by one.
   private static final String JS_SPACE = "[\\p{IsWhite_Space}\\uFEFF&&[^\\x85]]";
   private static final String JS_NON_SPACE = "[^" + JS_SPACE.substring(1);
+  // what JS's . matches: not \n \r U+2028 U+2029; an (?m: ^ or $ needs none of it beside it
+  private static final String JS_NON_TERMINATOR = "[^\\n\\r\\u2028-\\u2029]";
   // \b over Java's ASCII \w (its own \b counts non-ASCII letters as word chars)
   private static final String WORD_BOUNDARY = "(?:(?<=\\w)(?!\\w)|(?<!\\w)(?=\\w))";
   private static final String NON_WORD_BOUNDARY = "(?:(?<=\\w)(?=\\w)|(?<!\\w)(?!\\w))";
@@ -357,20 +360,21 @@ public final class Parser {
    * The JS spellings a tenant is likely to author and Java reads differently: {@code [^]} (any
    * char) -> {@code [\s\S]}, {@code \cX} -> the control character (Java's own \c reads a lower-case
    * letter differently), a bare {@code $} -> {@code \z} (Java's $ also accepts a final newline;
-   * JS's does not), and a named group {@code (?<name>} -> a plain {@code (} (JS admits {@code _}
-   * and {@code $} in a name, Java only letters and digits; nothing in the SDK reads the names),
-   * {@code []} -> {@code (?!)} (never matches), a JS identity escape ({@code \p}, {@code \Q},
-   * {@code \k} with no named group, an x or u escape without its hex digits) -> the bare letter, a
-   * {@code \c} with no letter -> a literal backslash and {@code c}, a left brace that opens no
-   * {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier -> escaped (JS reads it as a literal,
-   * Java throws), a {@code .} -> {@code [^\n\r\u2028-\u2029]} (JS's also matches U+0085, Java's
-   * does not; kept as is inside an {@code (?s:} group), and a {@code [} or {@code &&} inside a
-   * class -> escaped (Java reads a union / an intersection), {@code \v} -> {@code \x0B}, {@code
-   * [\b]} -> backspace, {@code \s \S} -> JS's whitespace set (a nested class, so a range next to it
-   * stays valid), {@code \b \B} outside a class -> lookarounds on Java's ASCII {@code \w}, and a
-   * decimal escape: a back-reference (or {@code \k<name>}) -> what reads the group as JS does, see
-   * below; anything else -> an Annex B legacy octal {@code \xHH} (or the bare digit for 8 and 9).
-   * Anything else the engine rejects still fails open.
+   * JS's does not; inside {@code (?m:} a {@code ^} and {@code $} -> lookarounds on \n \r U+2028
+   * U+2029), and a named group {@code (?<name>} -> a plain {@code (} (JS admits {@code _} and
+   * {@code $} in a name, Java only letters and digits; nothing in the SDK reads the names), {@code
+   * []} -> {@code (?!)} (never matches), a JS identity escape ({@code \p}, {@code \Q}, {@code \k}
+   * with no named group, an x or u escape without its hex digits) -> the bare letter, a {@code \c}
+   * with no letter -> a literal backslash and {@code c}, a left brace that opens no {@code {n}},
+   * {@code {n,}} or {@code {n,m}} quantifier -> escaped (JS reads it as a literal, Java throws), a
+   * {@code .} -> {@code [^\n\r\u2028-\u2029]} (JS's also matches U+0085, Java's does not; kept as
+   * is inside an {@code (?s:} group), and a {@code [} or {@code &&} inside a class -> escaped (Java
+   * reads a union / an intersection), {@code \v} -> {@code \x0B}, {@code [\b]} -> backspace, {@code
+   * \s \S} -> JS's whitespace set (a nested class, so a range next to it stays valid), {@code \b
+   * \B} outside a class -> lookarounds on Java's ASCII {@code \w}, and a decimal escape: a
+   * back-reference (or {@code \k<name>}) -> what reads the group as JS does, see below; anything
+   * else -> an Annex B legacy octal {@code \xHH} (or the bare digit for 8 and 9). Anything else the
+   * engine rejects still fails open.
    *
    * <p>A back-reference is emitted as a numeric Java reference to the group's number in the output
    * (Java rejects a named reference to a group not yet defined in the text, but accepts a numeric
@@ -508,12 +512,16 @@ public final class Parser {
         }
         continue;
       } else if (ch == '$') {
-        out.append("\\z");
+        out.append(cur.multiline ? "(?!" + JS_NON_TERMINATOR + ")" : "\\z");
+        i++;
+        continue;
+      } else if (ch == '^' && cur.multiline) {
+        out.append("(?<!" + JS_NON_TERMINATOR + ")");
         i++;
         continue;
       } else if (ch == '.') {
         // JS's . excludes only \n \r U+2028 U+2029; Java's also excludes U+0085
-        out.append(cur.dotAll ? "." : "[^\\n\\r\\u2028-\\u2029]");
+        out.append(cur.dotAll ? "." : JS_NON_TERMINATOR);
         i++;
         continue;
       } else if (ch == ')') {
@@ -541,8 +549,8 @@ public final class Parser {
     return out.toString();
   }
 
-  /** dotAll inside the group opening at {@code at}: {@code (?flags-flags:} may turn s on or off. */
-  private static boolean modifierDotAll(String p, int at, boolean cur) {
+  /** The state of flag {@code flag} inside the group opening at {@code at}: {@code (?on-off:}. */
+  private static boolean modifier(String p, int at, char flag, boolean cur) {
     int j = at + 1;
     if (j >= p.length() || p.charAt(j) != '?') {
       return cur;
@@ -553,7 +561,7 @@ public final class Parser {
     while (j < p.length() && (isAsciiLetter(p.charAt(j)) || p.charAt(j) == '-')) {
       if (p.charAt(j) == '-') {
         on = false;
-      } else if (p.charAt(j) == 's') {
+      } else if (p.charAt(j) == flag) {
         res = on;
       }
       j++;
@@ -611,19 +619,21 @@ public final class Parser {
     final int start;
     final int cap; // its capture number, 0 if not a capture
     final boolean dotAll; // inside an (?s: group, where . already matches everything
+    final boolean multiline; // inside an (?m: group, where ^ and $ also match at line breaks
     int alts = 1;
     boolean minZero; // a quantifier after its ) allows zero repeats
     boolean marked; // read as maybe-unset: wrapped with an empty marker group after it
     int jn; // Java group number of the capture in the output
     int mn; // Java group number of its marker, if marked
 
-    Group(Group parent, int alt, char kind, int start, int cap, boolean dotAll) {
+    Group(Group parent, int alt, char kind, int start, int cap, boolean dotAll, boolean multiline) {
       this.parent = parent;
       this.alt = alt;
       this.kind = kind;
       this.start = start;
       this.cap = cap;
       this.dotAll = dotAll;
+      this.multiline = multiline;
     }
 
     boolean negative() {
@@ -646,7 +656,7 @@ public final class Parser {
 
   /** The group tree and what the walk emits for each back-reference. */
   private static final class Refs {
-    final Group root = new Group(null, 0, 'o', 0, 0, false);
+    final Group root = new Group(null, 0, 'o', 0, 0, false, false);
     final Map<Integer, Group> groups = new HashMap<>(); // by offset of the (
     final Map<Integer, Emit> text = new HashMap<>(); // by offset of the backslash
     boolean namedGroups;
@@ -709,7 +719,9 @@ public final class Parser {
       } else if (ch == '(') {
         char kind = kindAt(p, i);
         int cap = kind == 'c' ? caps.size() + 1 : 0;
-        top = new Group(top, top.alts - 1, kind, i, cap, modifierDotAll(p, i, top.dotAll));
+        boolean dotAll = modifier(p, i, 's', top.dotAll);
+        boolean multiline = modifier(p, i, 'm', top.multiline);
+        top = new Group(top, top.alts - 1, kind, i, cap, dotAll, multiline);
         refs.groups.put(i, top);
         if (cap > 0) {
           caps.add(top);
