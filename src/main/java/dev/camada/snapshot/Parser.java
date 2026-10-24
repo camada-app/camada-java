@@ -350,12 +350,12 @@ public final class Parser {
    * c}, a left brace that opens no {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier -> escaped
    * (JS reads it as a literal, Java throws), a {@code .} -> {@code [^\n\r\u2028-\u2029]} (JS's also
    * matches U+0085, Java's does not; kept as is inside an {@code (?s:} group), and a {@code [} or
-   * {@code &&} inside a class -> escaped (Java reads a union / an intersection), {@code \v} -> {@code
-   * \x0B}, {@code [\b]} -> backspace, {@code \s \S} -> JS's whitespace set (a nested class, so a
-   * range next to it stays valid), {@code \b \B} outside a class -> lookarounds on Java's ASCII
-   * {@code \w}, and a decimal escape: a back-reference to a closed group -> {@code (?:\N)}, one to a
-   * group still open or not yet opened -> {@code (?:)} (JS matches empty), anything else -> an Annex
-   * B legacy octal {@code \xHH} (or the bare digit for 8 and 9). Inside a lookbehind a
+   * {@code &&} inside a class -> escaped (Java reads a union / an intersection), {@code \v} ->
+   * {@code \x0B}, {@code [\b]} -> backspace, {@code \s \S} -> JS's whitespace set (a nested class,
+   * so a range next to it stays valid), {@code \b \B} outside a class -> lookarounds on Java's
+   * ASCII {@code \w}, and a decimal escape: a back-reference to a closed group -> {@code (?:\N)},
+   * one to a group still open or not yet opened -> {@code (?:)} (JS matches empty), anything else
+   * -> an Annex B legacy octal {@code \xHH} (or the bare digit for 8 and 9). Inside a lookbehind a
    * back-reference stays {@code (?:\N)}. Anything else the engine rejects still fails open.
    */
   static String jsToJava(String pattern) {
