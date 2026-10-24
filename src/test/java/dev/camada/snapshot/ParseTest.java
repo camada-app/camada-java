@@ -326,8 +326,8 @@ class ParseTest {
     js("^(?s:a(?-s:.))$", "a\u0085", true);
     js("^(?s:.)(.)$", "a\n", false);
     assertEquals("(?s:.)", Parser.jsToJava("(?s:.)"));
-    Parser.jsToJava("a).");
-    Parser.jsToJava("(.");
+    assertEquals("a)[^\\n\\r\\u2028-\\u2029]", Parser.jsToJava("a).")); // a stray ) pops nothing
+    assertEquals("([^\\n\\r\\u2028-\\u2029]", Parser.jsToJava("(."));
     assertNull(Parser.compileRegex("a)."));
   }
 
