@@ -333,9 +333,8 @@ public final class Parser {
    * -> its number (JS admits {@code _} and {@code $} in a name, Java only letters and digits;
    * nothing in the SDK reads the names), and a left brace that opens no {@code {n}}, {@code {n,}}
    * or {@code {n,m}} quantifier -> escaped (JS reads it as a literal, Java throws), and a {@code [}
-   * or {@code &&} inside a class -> escaped (Java reads a union / an intersection), an astral char
-   * inside a class -> a lone high surrogate (JS reads two units). Anything else the engine rejects
-   * still fails open.
+   * or {@code &&} inside a class -> escaped (Java reads a union / an intersection). Anything else
+   * the engine rejects still fails open.
    */
   static String jsToJava(String pattern) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
@@ -372,15 +371,6 @@ public final class Parser {
         if (ch == '[' || (ch == '&' && i + 1 < n && pattern.charAt(i + 1) == '&')) {
           out.append('\\').append(ch);
           i++;
-          continue;
-        }
-        if (Character.isHighSurrogate(ch)
-            && i + 1 < n
-            && Character.isLowSurrogate(pattern.charAt(i + 1))) {
-          // JS (no u flag) reads an astral char in a class as two units, so the class never
-          // matches the whole char; a lone high surrogate does the same in Java
-          out.append(String.format("\\u%04X", (int) ch));
-          i += 2;
           continue;
         }
         inClass = ch != ']';
