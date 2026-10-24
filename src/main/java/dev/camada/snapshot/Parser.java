@@ -333,9 +333,9 @@ public final class Parser {
    * nothing in the SDK reads the names), {@code []} -> {@code (?!)} (never matches), a JS identity
    * escape ({@code \p}, {@code \Q}, {@code \k} with no named group, an x or u escape without its
    * hex digits) -> the bare letter, a {@code \c} with no letter -> a literal backslash and {@code
-   * c}, a left brace that opens no {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier ->
-   * escaped (JS reads it as a literal, Java throws), and a {@code [} or {@code &&} inside a class
-   * -> escaped (Java reads a union / an intersection). Anything else the engine rejects still fails
+   * c}, a left brace that opens no {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier -> escaped
+   * (JS reads it as a literal, Java throws), and a {@code [} or {@code &&} inside a class ->
+   * escaped (Java reads a union / an intersection). Anything else the engine rejects still fails
    * open.
    */
   static String jsToJava(String pattern) {
