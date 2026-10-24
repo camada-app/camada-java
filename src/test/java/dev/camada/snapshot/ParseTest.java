@@ -243,6 +243,9 @@ class ParseTest {
     assertFalse(Parser.compileRegex("^a{2,}$").matcher("a").find());
     assertTrue(Parser.compileRegex("^a{2,3}$").matcher("aaa").find());
     assertFalse(Parser.compileRegex("^a{2,3}$").matcher("aaaa").find());
+    Pattern huge = Parser.compileRegex("^a{1,99999999999}$");
+    assertTrue(huge.matcher("a").find());
+    assertEquals("a{2147483647,2147483647}b{3}", Parser.jsToJava("a{99999999999,99999999999}b{3}"));
     assertEquals("/api/\\{id}", Parser.jsToJava("/api/{id}"));
     assertEquals("a\\{b a{2,3} [{,3}]", Parser.jsToJava("a{b a{2,3} [{,3}]"));
     assertEquals("a\\{b[{]", Parser.jsToJava("a\\{b[{]"));

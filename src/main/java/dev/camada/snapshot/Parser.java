@@ -347,7 +347,7 @@ public final class Parser {
           out.append("\\{");
           i++;
         } else {
-          out.append(pattern, i, end);
+          out.append(clampBounds(pattern.substring(i, end)));
           i = end;
         }
         continue;
@@ -376,6 +376,24 @@ public final class Parser {
       i++;
     }
     return out.toString();
+  }
+
+  /**
+   * A quantifier with each bound above Integer.MAX_VALUE clamped to it: Java rejects those, JS does
+   * not.
+   */
+  private static String clampBounds(String q) {
+    StringBuilder sb = new StringBuilder();
+    for (String part : q.split("(?<=[{,])|(?=[,}])")) {
+      boolean big =
+          part.length() > 9
+              && part.chars().allMatch(Character::isDigit)
+              && new java.math.BigInteger(part)
+                      .compareTo(java.math.BigInteger.valueOf(Integer.MAX_VALUE))
+                  > 0;
+      sb.append(big ? String.valueOf(Integer.MAX_VALUE) : part);
+    }
+    return sb.toString();
   }
 
   /** The index just past a {@code {n}}, {@code {n,}} or {@code {n,m}} at {@code i}, else -1. */
