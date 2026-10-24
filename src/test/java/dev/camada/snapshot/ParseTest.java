@@ -227,7 +227,7 @@ class ParseTest {
     assertNull(m4.match(MatchInput.ip(null).withPath("/u/7/a/80")).rule());
     assertNull(m4.match(MatchInput.ip(null).withPath("/u/7/a/7")).rule());
     assertEquals(
-        "^(a)(?:x)(?<g2>\\d)\\k<g2>\\k<m>[(?<n>]",
+        "^(a)(?:x)(\\d)(?:\\2)\\k<m>[(?<n>]",
         Parser.jsToJava(
             "^(a)(?:x)(?<n>\\d)\\k<n>\\k<m>[(?<n>]")); // \k<m>: no such group, left alone
     assertNull(Parser.compileRegex("(?<user_id>a)\\k<nope>")); // an unknown name still fails open
@@ -445,7 +445,7 @@ class ParseTest {
     js("^(a\\1)$", "a", true);
     js("^\\k<a>(?<a>x)$", "x", true);
     js("^(?<a>x\\k<a>)$", "x", true);
-    assertEquals("(?<g1>a)\\k<g1>", Parser.jsToJava("(a)\\1"));
+    assertEquals("(a)(?:\\1)", Parser.jsToJava("(a)\\1"));
     assertEquals("\\x200", Parser.jsToJava("\\400"));
   }
 
@@ -486,10 +486,17 @@ class ParseTest {
     js("(?<!(a)\\1)b", "cb", true);
     // Java leaks a capture out of a lookaround it backtracks through; JS does not
     js("^(?:x(?!(a))|xa)\\1$", "xa", true);
-    assertEquals("^(?:(?<g1>a)(?<m1>))?(?:\\k<g1>|(?!\\k<m1>))b\\z", Parser.jsToJava("^(a)?\\1b$"));
+    assertEquals("^(?:(a)())?(?:\\1|(?!\\2))b\\z", Parser.jsToJava("^(a)?\\1b$"));
+    assertEquals("^(?:(a)())?(b)(?:\\1|(?!\\2))(?:\\3)\\z", Parser.jsToJava("^(a)?(b)\\1\\2$"));
+    js("^(a)?(b)\\1\\2$", "bb", true);
+    js("^(a)?(b)\\1\\2$", "abab", true);
+    js("^(a)?(b)\\1\\2$", "abb", false);
+    // Java rejects a named reference to a group not yet defined in the text; a numeric one is fine
+    js("(?<=(?!\\1x)(a))b", "ab", true);
     assertEquals("^(?:(a)|b(?:))+\\z", Parser.jsToJava("^(?:(a)|b\\1)+$"));
-    assertEquals("(?<g1>a)\\k<g1>", Parser.jsToJava("(a)\\1"));
-    // the alternation form recurses per loop iteration, the exact form does not
+    assertEquals("(a)(?:\\1)", Parser.jsToJava("(a)\\1"));
+    // measured: the marker alternation overflows a 256 KB thread stack near 411 chars of input;
+    // the plain reference does not at 2046. This input (2047 chars) must still match
     AtomicReference<Throwable> deep = new AtomicReference<>();
     Thread t =
         new Thread(
@@ -511,12 +518,18 @@ class ParseTest {
   // Java cannot express these: the rule fails open (null), and is logged once per pattern
   @Test
   void aBackReferenceJavaRejectsIsLoggedOnce() {
+    // a pattern unique to this run, so the process-global once-set and other warnings don't matter
+    String nonce = java.util.UUID.randomUUID().toString().replaceAll("[^a-f]", "");
+    String p1 = "(?<=\\1(a))b|" + nonce;
+    String p2 = "(a)(?<=\\1)b|" + nonce;
     List<String> seen = new CopyOnWriteArrayList<>();
     Handler h =
         new Handler() {
           @Override
           public void publish(LogRecord r) {
-            seen.add(r.getMessage());
+            if (r.getMessage().contains(nonce)) {
+              seen.add(r.getMessage());
+            }
           }
 
           @Override
@@ -528,12 +541,19 @@ class ParseTest {
     Logger log = Logger.getLogger("camada");
     log.addHandler(h);
     try {
-      assertNull(Parser.compileRegex("(?<=\\1(a))b"));
-      assertNull(Parser.compileRegex("(?<=\\1(a))b"));
+      assertNull(Parser.compileRegex(p1));
+      assertNull(Parser.compileRegex(p1));
       assertEquals(1, seen.size(), seen.toString());
-      assertTrue(seen.get(0).contains("/(?<=\\1(a))b/"), seen.get(0));
-      assertNull(Parser.compileRegex("(a)(?<=\\1)b"));
+      assertTrue(seen.get(0).contains("/" + p1 + "/"), seen.get(0));
+      assertNull(Parser.compileRegex(p2));
       assertEquals(2, seen.size());
+      // two long patterns sharing a 200-char prefix both log, on one line each
+      String pre = nonce + "\n(?<=\\1(a))b" + "x".repeat(200);
+      assertNull(Parser.compileRegex(pre + "1"));
+      assertNull(Parser.compileRegex(pre + "2"));
+      assertEquals(4, seen.size(), seen.toString());
+      assertFalse(seen.get(2).contains("\n"), seen.get(2));
+      assertNull(Parser.compileRegex(null)); // never throws
     } finally {
       log.removeHandler(h);
     }

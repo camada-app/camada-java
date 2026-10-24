@@ -331,10 +331,14 @@ public final class Parser {
           e instanceof PatternSyntaxException pse
               ? pse.getDescription()
               : e.getClass().getSimpleName();
+      if (pattern == null) {
+        return null;
+      }
       String clip = pattern.length() > 200 ? pattern.substring(0, 200) : pattern;
+      String shown = clip.replace("\n", "\\n").replace("\r", "\\r");
       Guarded.logOnce(
-          clip,
-          "[camada] regex never matches on this runtime, rule fails open: /" + clip + "/ " + why);
+          clip + pattern.length() + ":" + pattern.hashCode(),
+          "[camada] regex never matches on this runtime, rule fails open: /" + shown + "/ " + why);
       return null;
     }
   }
@@ -366,24 +370,29 @@ public final class Parser {
    * below; anything else -> an Annex B legacy octal {@code \xHH} (or the bare digit for 8 and 9).
    * Anything else the engine rejects still fails open.
    *
-   * <p>A group that is read back opens as {@code (?<gN>} (N is its JS number; Java names allow only
-   * letters and digits). A back-reference JS always reads as unset (to a group that encloses it,
-   * sits in another alternative, is inside a negative lookaround, or is not yet evaluated, which
-   * runs right to left in a lookbehind) -> {@code (?:)}, which JS matches as empty. One to a group
-   * that is certainly set -> {@code \k<gN>}. Any other -> {@code (?:\k<gN>|(?!\k<mN>))}, with the
-   * group wrapped as {@code (?:(?<gN>...)(?<mN>))} so the empty marker m is set exactly when the
-   * group is: Java fails a back-reference to an unset group, JS matches it as empty. A {@code
-   * \k<name>} reads every definition of the name (ES2025 duplicates). A back-reference Java cannot
-   * express (to a group after it, or outside it, within a lookbehind) is rejected and compileRegex
-   * returns null.
+   * <p>A back-reference is emitted as a numeric Java reference to the group's number in the output
+   * (Java rejects a named reference to a group not yet defined in the text, but accepts a numeric
+   * one). A back-reference JS always reads as unset (to a group that encloses it, sits in another
+   * alternative, is inside a negative lookaround, or is not yet evaluated, which runs right to left
+   * in a lookbehind) -> {@code (?:)}, which JS matches as empty. One to a group that is certainly
+   * set -> {@code (?:\J)}, J being the Java number of the group. Any other -> {@code
+   * (?:\J|(?!\K))}, with the group wrapped as {@code (?:(...)())} so the empty marker group (Java
+   * number K, opened just after the group closes) is set exactly when the group is: Java fails a
+   * back-reference to an unset group, JS matches it as empty. A {@code \k<name>} reads every
+   * definition of the name (ES2025 duplicates). A back-reference Java cannot express (to a group
+   * after it, or outside it, within a lookbehind) is rejected and compileRegex returns null.
    *
    * <p>Residuals, where Java cannot unset a capture: (A) a group inside a loop that an earlier
    * iteration set and this one skipped, read in the {@code (?:...)} alternation form: {@code
    * ^(?:(a)?b\1)+$} on "abab" is true in JS and false here; {@code ^(?:(a)|c)*\1b$} on "acab" is
    * false in JS and true here. (B) a capture leaking out of a positive lookaround: {@code
    * ^(?:(?=(a))ab|a)\1b$} on "ab" is true in JS and false here. (C) the lookbehind back-references
-   * above, which fail open, logged once. Nothing the backend accepts since camada-all-xuxq carries
-   * a back-reference, so reopen this if that screen is relaxed.
+   * above, which fail open, logged once. (D) Java's loops ({@code *}, {@code +}, {@code {n,m}}) do
+   * not restore captures when they backtrack out of an iteration or move to the next find() start,
+   * so a MAYBE or SET reference to a group under such a loop may read a stale value: {@code
+   * ^(b)*\1b$} on "b" is true in JS and false here (the old build was false too; the marker form
+   * never matches less than the old {@code (?:\N)}). Nothing the backend accepts since
+   * camada-all-xuxq carries a back-reference, so reopen this if that screen is relaxed.
    */
   static String jsToJava(String pattern) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
@@ -507,7 +516,7 @@ public final class Parser {
         if (closed.parent != null) { // a stray ) at the root stays as is
           cur = closed.parent;
           if (closed.marked) {
-            out.append(")(?<m").append(closed.cap).append(">))");
+            out.append(")())");
             i++;
             continue;
           }
@@ -515,8 +524,7 @@ public final class Parser {
       } else if (ch == '(') {
         cur = refs.groups.get(i);
         if (cur.cap > 0) {
-          out.append(cur.marked ? "(?:" : "");
-          out.append(cur.named ? "(?<g" + cur.cap + ">" : "(");
+          out.append(cur.marked ? "(?:(" : "(");
           int close = nameEnd(pattern, i);
           i = close > 0 ? close + 1 : i + 1;
           continue;
@@ -600,8 +608,9 @@ public final class Parser {
     final boolean dotAll; // inside an (?s: group, where . already matches everything
     int alts = 1;
     boolean minZero; // a quantifier after its ) allows zero repeats
-    boolean named; // read back: opens as (?<gN>
-    boolean marked; // read as maybe-unset: wrapped with the empty marker mN
+    boolean marked; // read as maybe-unset: wrapped with an empty marker group after it
+    int jn; // Java group number of the capture in the output
+    int mn; // Java group number of its marker, if marked
 
     Group(Group parent, int alt, char kind, int start, int cap, boolean dotAll) {
       this.parent = parent;
@@ -623,6 +632,9 @@ public final class Parser {
 
   /** A back-reference: where it ends, the group and alternative holding it, the number or name. */
   private record Ref(int at, int end, Group in, int alt, int num, String name) {}
+
+  /** A back-reference with the live target groups and how JS reads the last of them. */
+  private record Decided(Ref r, List<Integer> live, Read read) {}
 
   /** What the walk emits for a back-reference, and where it resumes. */
   private record Emit(String text, int end) {}
@@ -663,6 +675,7 @@ public final class Parser {
     List<Group> caps = new ArrayList<>();
     Map<String, List<Integer>> names = new HashMap<>();
     List<Ref> sites = new ArrayList<>();
+    List<Group> events = new ArrayList<>(); // capture opens and closes, in output order
     boolean inClass = false;
     for (int i = 0; i < n; i++) {
       char ch = p.charAt(i);
@@ -695,6 +708,7 @@ public final class Parser {
         refs.groups.put(i, top);
         if (cap > 0) {
           caps.add(top);
+          events.add(top);
           int close = nameEnd(p, i);
           if (close > 0) {
             names.computeIfAbsent(p.substring(i + 3, close), k -> new ArrayList<>()).add(cap);
@@ -702,10 +716,14 @@ public final class Parser {
         }
       } else if (ch == ')' && top.parent != null) {
         top.minZero = minZero(p, i + 1);
+        if (top.cap > 0) {
+          events.add(top);
+        }
         top = top.parent;
       }
     }
     refs.namedGroups = !names.isEmpty();
+    List<Decided> decided = new ArrayList<>();
     for (Ref r : sites) {
       List<Integer> targets = r.name == null ? List.of(r.num) : names.get(r.name);
       if (targets == null || r.num > caps.size()) {
@@ -724,25 +742,40 @@ public final class Parser {
           read = rd;
         }
       }
+      if (read == Read.MAYBE || live.size() > 1) {
+        for (int c : live) {
+          caps.get(c - 1).marked = true;
+        }
+      }
+      decided.add(new Decided(r, live, read));
+    }
+    // number the groups as Java will see them: a marker opens as its group closes
+    int next = 0;
+    Set<Group> opened = new HashSet<>();
+    for (Group g : events) {
+      if (opened.add(g)) {
+        g.jn = ++next;
+      } else if (g.marked) {
+        g.mn = ++next;
+      }
+    }
+    for (Decided d : decided) {
       String text;
-      if (live.isEmpty()) {
+      if (d.live.isEmpty()) {
         text = "(?:)";
-      } else if (live.size() == 1 && read == Read.SET) {
-        caps.get(live.get(0) - 1).named = true;
-        text = "\\k<g" + live.get(0) + ">";
+      } else if (d.live.size() == 1 && d.read == Read.SET) {
+        text = "(?:\\" + caps.get(d.live.get(0) - 1).jn + ")";
       } else {
         StringBuilder sb = new StringBuilder("(?:");
-        for (int c : live) {
-          sb.append("\\k<g").append(c).append(">|");
+        for (int c : d.live) {
+          sb.append('\\').append(caps.get(c - 1).jn).append('|');
         }
-        for (int c : live) {
-          sb.append("(?!\\k<m").append(c).append(">)");
-          caps.get(c - 1).named = true;
-          caps.get(c - 1).marked = true;
+        for (int c : d.live) {
+          sb.append("(?!\\").append(caps.get(c - 1).mn).append(')');
         }
         text = sb.append(')').toString();
       }
-      refs.text.put(r.at, new Emit(text, r.end));
+      refs.text.put(d.r.at, new Emit(text, d.r.end));
     }
     return refs;
   }

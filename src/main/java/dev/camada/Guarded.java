@@ -6,10 +6,10 @@ import java.util.logging.Logger;
 
 /**
  * The fail-open envelope: a camada bug must never 5xx the customer. Every public entry point of the
- * SDK catches, falls back, and reports through {@link #logRateLimited}: at most one line a minute,
- * on java.util.logging's "camada" logger (bridged wherever the host bridges JUL). The line carries
- * the error's toString only — never a stack trace — so a log scraper sees one message, not a
- * traceback.
+ * SDK catches, falls back, and reports through {@link #logRateLimited} (at most one line a minute)
+ * or {@link #logOnce} (one line per key per process), on java.util.logging's "camada" logger
+ * (bridged wherever the host bridges JUL). The line carries the error's toString only — never a
+ * stack trace — so a log scraper sees one message, not a traceback.
  */
 public final class Guarded {
   private Guarded() {}
