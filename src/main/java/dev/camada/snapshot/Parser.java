@@ -97,7 +97,7 @@ public final class Parser {
       Set<String> tls,
       Set<String> pathsExact,
       Set<String> pathsPrefix,
-      List<Regex> pathsRegex,
+      List<Pattern> pathsRegex,
       RangeSet allow,
       RangeSet challenge,
       List<CompiledRule> rules) {} // v5 only; empty on v3/v4, and the matcher then skips them
@@ -229,7 +229,8 @@ public final class Parser {
     return v.length() > MAX_MATCH_INPUT ? deny : rx.find(v, deny);
   }
 
-  // U+0300 is the first non-spacing mark (Mn), so a char below it is never one
+  // U+0300 is the first non-spacing mark (Mn), so a char below it is never one. A supplementary
+  // mark is safe: unitView turns it into a stand-in that is not a mark
   static boolean hasMark(String s) {
     for (int i = 0; i < s.length(); i++) {
       char c = s.charAt(i);
@@ -269,7 +270,7 @@ public final class Parser {
    * java.util.regex recurses per group iteration, so a nested quantifier against a long path or
    * user agent overflows the request thread's stack where JS and Python's engines would not. The
    * legacy path list uses this; a v5 rule goes through {@link Regex#find}. Both end in {@link
-   * #find(Pattern, String, boolean)}, which this answers {@code false} on failure.
+   * #find(Pattern, String, boolean)}.
    */
   public static boolean find(Pattern rx, String input) {
     return find(rx, input, false);
@@ -445,13 +446,13 @@ public final class Parser {
     }
     Pattern bounds = null;
     if (NATIVE_BOUNDS) {
-      String nb = jsToJava(pattern, true);
-      if (!(nb + SEED).equals(exact.pattern())) {
-        try {
+      try {
+        String nb = jsToJava(pattern, true);
+        if (!(nb + SEED).equals(exact.pattern())) {
           bounds = compileJava(nb, pattern, flags); // the exact one compiled, so this logs nothing
-        } catch (RuntimeException | StackOverflowError e) {
-          // no twin: the exact one runs
         }
+      } catch (RuntimeException | StackOverflowError e) {
+        // no twin: the exact one runs
       }
     }
     return new Regex(exact, bounds);
@@ -1367,9 +1368,9 @@ public final class Parser {
       }
     }
     IntBuffer s6 = sec.getOrDefault(5, EMPTY);
-    List<Regex> regex = new ArrayList<>();
+    List<Pattern> regex = new ArrayList<>();
     for (String p : Config.strings(meta.get("pathsRegex"))) {
-      Regex rx = compileRule(p, Pattern.CASE_INSENSITIVE);
+      Pattern rx = compileRegex(p, Pattern.CASE_INSENSITIVE);
       if (rx != null) {
         regex.add(rx);
       }
