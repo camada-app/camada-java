@@ -451,7 +451,8 @@ class ParseTest {
             + "\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF";
     Pattern s = Parser.compileRegex("^\\s$");
     Pattern ns = Parser.compileRegex("^[^\\S]$", Pattern.CASE_INSENSITIVE);
-    for (char c = 0; c < 0xFFFF; c++) {
+    for (int cp = 0; cp <= 0xFFFF; cp++) {
+      char c = (char) cp;
       if (!Character.isSurrogate(c)) {
         String in = String.valueOf(c);
         boolean want = jsSpace.indexOf(c) >= 0;
