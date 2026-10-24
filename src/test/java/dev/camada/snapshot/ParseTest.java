@@ -17,6 +17,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
@@ -214,7 +217,7 @@ class ParseTest {
     assertEquals("[$]\\$a(b)(?<=c)(?<!d)", Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)(?<!d)"));
     assertEquals("a\\x0A", Parser.jsToJava("a\\cj")); // JS reads \cj as \cJ; Java would not
     // JS admits _ and $ in a group name; Java only letters and digits, so names are dropped and a
-    // \k<name> back-reference becomes its number (nothing in the SDK reads the names)
+    // \k<name> back-reference reads a generated name (nothing in the SDK reads the names)
     Matcher m4 =
         rulesSnapshot(
             "[{\"id\":\"u\",\"action\":\"block\",\"conds\":[{\"f\":\"path\",\"op\":\"matches\",\"v\":\"^/u/(?<user_id>\\\\d+)/(?<$x>[a-z]+)/\\\\k<user_id>0$\"}]}]");
@@ -222,7 +225,7 @@ class ParseTest {
     assertNull(m4.match(MatchInput.ip(null).withPath("/u/7/a/80")).rule());
     assertNull(m4.match(MatchInput.ip(null).withPath("/u/7/a/7")).rule());
     assertEquals(
-        "^(a)(?:x)(\\d)(?:\\2)\\k<m>[(?<n>]",
+        "^(a)(?:x)(?<g2>\\d)\\k<g2>\\k<m>[(?<n>]",
         Parser.jsToJava(
             "^(a)(?:x)(?<n>\\d)\\k<n>\\k<m>[(?<n>]")); // \k<m>: no such group, left alone
     assertNull(Parser.compileRegex("(?<user_id>a)\\k<nope>")); // an unknown name still fails open
@@ -440,8 +443,98 @@ class ParseTest {
     js("^(a\\1)$", "a", true);
     js("^\\k<a>(?<a>x)$", "x", true);
     js("^(?<a>x\\k<a>)$", "x", true);
-    assertEquals("(a)(?:\\1)", Parser.jsToJava("(a)\\1"));
+    assertEquals("(?<g1>a)\\k<g1>", Parser.jsToJava("(a)\\1"));
     assertEquals("\\x200", Parser.jsToJava("\\400"));
+  }
+
+  // a back-reference to a group that did not participate reads as empty, as in JS (checked with
+  // node 24)
+  @Test
+  void backReferencesToUnsetGroupsReadEmpty() throws Exception {
+    js("^(?:(a)|b)\\1$", "b", true);
+    js("^(?:(a)|b)\\1$", "aa", true);
+    js("^(?:(a)|b)\\1$", "a", false);
+    js("^(?!(a))\\1b$", "b", true);
+    js("^(a)?\\1b$", "b", true);
+    js("^(a)?\\1b$", "aab", true);
+    js("^(a)?\\1b$", "ab", false);
+    js("^(?:(a)|b\\1)+$", "ab", true);
+    js("^(?:(a)|b\\1)+$", "ba", true);
+    js("(?<y>a)|(?<y>b)\\k<y>", "bb", true);
+    js("(?<y>a)|(?<y>b)\\k<y>", "b", false);
+    js("^(?:(?<y>a)|(?<y>b))\\k<y>$", "bb", true);
+    js("^(?:(?<y>a)|(?<y>b))\\k<y>$", "aa", true);
+    js("^(?:(?<y>a)|(?<y>b))\\k<y>$", "ab", false);
+    js("^(?:(?<y>a)|(?<y>b)|c)\\k<y>$", "c", true);
+    js("^(?:(?<y>a)|(?<y>b)|c)\\k<y>$", "cc", false);
+    // a group that is certainly set stays an exact \k<gN>
+    js("^(?:(a|b)c)+\\1$", "acbcb", true);
+    js("^(?:(a|b)c)+\\1$", "acbca", false);
+    js("^(?:(a)b\\1)+$", "abaaba", true);
+    js("(?=(a+))\\1b", "aaab", true);
+    js("(?<=(a))\\1b", "aab", true);
+    js("(?<=(a))\\1b", "ab", false);
+    js("(?s:(a).)\\1", "a\u0085a", true);
+    // a lookbehind runs right to left, so its group is not yet set at a back-reference to its left
+    js("(?<=(a)\\1)b", "aab", true);
+    js("(?<=(a)\\1)b", "ab", true);
+    js("(?<=(a)\\1)b", "b", false);
+    js("(?<=(?:(a)|c\\1))b", "cb", true);
+    js("(?<!(a)\\1)b", "ab", false);
+    js("(?<!(a)\\1)b", "cb", true);
+    // Java leaks a capture out of a lookaround it backtracks through; JS does not
+    js("^(?:x(?!(a))|xa)\\1$", "xa", true);
+    assertEquals("^(?:(?<g1>a)(?<m1>))?(?:\\k<g1>|(?!\\k<m1>))b\\z", Parser.jsToJava("^(a)?\\1b$"));
+    assertEquals("^(?:(a)|b(?:))+\\z", Parser.jsToJava("^(?:(a)|b\\1)+$"));
+    assertEquals("(?<g1>a)\\k<g1>", Parser.jsToJava("(a)\\1"));
+    // the alternation form recurses per loop iteration, the exact form does not
+    String[] deep = new String[1];
+    Thread t =
+        new Thread(
+            null,
+            () -> {
+              try {
+                js("^(?:(a)b\\1)*c", "aba".repeat(682) + "c", true);
+              } catch (Throwable e) {
+                deep[0] = e.toString();
+              }
+            },
+            "small-stack",
+            256 * 1024);
+    t.start();
+    t.join();
+    assertNull(deep[0]);
+  }
+
+  // Java cannot express these: the rule fails open (null), and is logged once per pattern
+  @Test
+  void aBackReferenceJavaRejectsIsLoggedOnce() {
+    List<String> seen = new ArrayList<>();
+    Handler h =
+        new Handler() {
+          @Override
+          public void publish(LogRecord r) {
+            seen.add(r.getMessage());
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    Logger log = Logger.getLogger("camada");
+    log.addHandler(h);
+    try {
+      assertNull(Parser.compileRegex("(?<=\\1(a))b"));
+      assertNull(Parser.compileRegex("(?<=\\1(a))b"));
+      assertEquals(1, seen.size(), seen.toString());
+      assertTrue(seen.get(0).contains("/(?<=\\1(a))b/"), seen.get(0));
+      assertNull(Parser.compileRegex("(a)(?<=\\1)b"));
+      assertEquals(2, seen.size());
+    } finally {
+      log.removeHandler(h);
+    }
   }
 
   @Test
