@@ -266,7 +266,8 @@ public final class Parser {
   /**
    * As {@link #find(Pattern, String)}, with {@code onFailure} as the answer when the engine fails
    * (a StackOverflowError or any RuntimeException from the matcher): a deny rule passes true so a
-   * failure fails closed like an over-cap value, a skip rule passes false.
+   * failure fails closed like an over-cap value, a skip rule passes false. The input is matched as
+   * JS reads it, in UTF-16 code units: see {@link #unitView}.
    */
   public static boolean find(Pattern rx, String input, boolean onFailure) {
     long[] left = REQUEST_LEFT.get();
@@ -279,7 +280,7 @@ public final class Parser {
       budget = Math.min(budget, left[0]);
     }
     try {
-      return rx.matcher(new Deadline(input, start + budget)).find();
+      return rx.matcher(new Deadline(unitView(input), start + budget)).find();
     } catch (StackOverflowError | RuntimeException e) { // incl. Deadline.RegexBudgetExceeded
       return onFailure;
     } finally {
@@ -287,6 +288,39 @@ public final class Parser {
         left[0] -= System.nanoTime() - start;
       }
     }
+  }
+
+  /** The code point standing for the surrogate code unit {@code u} (plane-15 private use). */
+  static int standIn(int u) {
+    return 0xF0000 + (u - 0xD800);
+  }
+
+  /** Appends {@code c}, or its stand-in if it is a surrogate. */
+  private static void appendUnit(StringBuilder sb, char c) {
+    if (Character.isSurrogate(c)) {
+      sb.appendCodePoint(standIn(c));
+    } else {
+      sb.append(c);
+    }
+  }
+
+  /**
+   * {@code s} with every surrogate code unit as its stand-in, so java.util.regex (which reads code
+   * points) sees the one-unit-per-char string JS does; {@code s} itself when it has none.
+   */
+  static String unitView(String s) {
+    int i = 0;
+    while (i < s.length() && !Character.isSurrogate(s.charAt(i))) {
+      i++;
+    }
+    if (i == s.length()) {
+      return s;
+    }
+    StringBuilder sb = new StringBuilder(s.length() + 8).append(s, 0, i);
+    for (; i < s.length(); i++) {
+      appendUnit(sb, s.charAt(i));
+    }
+    return sb.toString();
   }
 
   /** Longest one customer regex may run, in milliseconds (contract regex-limit v1). */
@@ -314,7 +348,8 @@ public final class Parser {
    * the default (non-UNICODE_CHARACTER_CLASS) mode keeps \d \w as JS reads them (ASCII). \s \S \b
    * \B are rewritten (see jsToJava) because Java 17's \s is ASCII-only and its \b counts non-ASCII
    * letters as word chars. A JS-valid pattern this runtime rejects (null, so the rule never fires)
-   * is logged once per process, whatever the reason: see {@link Guarded#logOnce}.
+   * is logged once per process, whatever the reason: see {@link Guarded#logOnce}. It matches code
+   * units, as JS does: run it through {@link #find}, not {@code matcher} on the raw input.
    */
   public static Pattern compileRegex(String pattern) {
     return compileRegex(pattern, 0);
@@ -326,7 +361,15 @@ public final class Parser {
       // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
       // where i is off). Java's u also folds a few letters JS's non-u /i does not (U+212A to k,
       // U+017F to s, U+0130 and U+0131 to i)
-      return Pattern.compile(jsToJava(pattern), flags | Pattern.UNICODE_CASE);
+      String js = jsToJava(pattern);
+      int bs = 0;
+      while (bs < js.length() && js.charAt(js.length() - 1 - bs) == '\\') {
+        bs++;
+      }
+      if (bs % 2 == 1) { // a trailing \ (JS rejects it) would escape SEED's ( and match anything
+        throw new PatternSyntaxException("trailing backslash", pattern, pattern.length());
+      }
+      return Pattern.compile(js + SEED, flags | Pattern.UNICODE_CASE);
     } catch (RuntimeException | StackOverflowError e) {
       String why =
           e instanceof PatternSyntaxException pse
@@ -346,6 +389,10 @@ public final class Parser {
     }
   }
 
+  // a supplementary char anywhere in the text makes Java use its surrogate-aware start and
+  // lookbehind nodes; this group matches empty
+  private static final String SEED =
+      "(?:" + new String(Character.toChars(standIn(0xD800))) + "){0}";
   // JS's \s is Unicode White_Space without U+0085, plus U+FEFF; Java's \s is ASCII-only. One
   // property lookup per char, where a list of the members is tested one by one.
   private static final String JS_SPACE = "[\\p{IsWhite_Space}\\uFEFF&&[^\\x85]]";
@@ -375,6 +422,12 @@ public final class Parser {
    * back-reference (or {@code \k<name>}) -> what reads the group as JS does, see below; anything
    * else -> an Annex B legacy octal {@code \xHH} (or the bare digit for 8 and 9). Anything else the
    * engine rejects still fails open.
+   *
+   * <p>JS (no {@code u} flag) reads UTF-16 code units, Java code points, so each surrogate unit is
+   * a stand-in code point on both sides (see {@link #unitView}): a raw or {@code \\uD83D}-escaped
+   * one in the pattern, and a class range over D800-DFFF split around the block. {@link
+   * #compileRegex} appends an empty group holding a supplementary char, which makes Java count a
+   * lookbehind's length in code points and start a match only on a code point boundary.
    *
    * <p>A back-reference is emitted as a numeric Java reference to the group's number in the output
    * (Java rejects a named reference to a group not yet defined in the text, but accepts a numeric
@@ -407,11 +460,30 @@ public final class Parser {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
+    int atomEnd = 0; // in a class: where the atom (or range) being walked ends
     Refs refs = scanRefs(pattern);
     Group cur = refs.root; // the group the walk is in
     int i = 0;
     while (i < n) {
       char ch = pattern.charAt(i);
+      if (inClass && i >= atomEnd && ch != ']') { // a true atom start: maybe a range
+        int[] lo = classAtom(pattern, i);
+        atomEnd = lo[1];
+        if (lo[0] >= 0
+            && lo[1] + 1 < n
+            && pattern.charAt(lo[1]) == '-'
+            && pattern.charAt(lo[1] + 1) != ']') {
+          int[] hi = classAtom(pattern, lo[1] + 1);
+          if (hi[0] >= 0) {
+            atomEnd = hi[1];
+            if (lo[0] <= hi[0] && lo[0] <= 0xDFFF && hi[0] >= 0xD800) {
+              splitRange(out, lo[0], hi[0]);
+              i = hi[1];
+              continue;
+            }
+          }
+        }
+      }
       if (ch == '\\' && i + 1 < n) {
         char nxt = pattern.charAt(i + 1);
         if (nxt == 'c') {
@@ -421,10 +493,18 @@ public final class Parser {
             out.append(String.format("\\x%02X", l & 0x1F));
             i += 3;
           } else {
-            out.append("\\\\c"); // a literal backslash and c, as JS reads a bare \c
-            i += 2;
+            out.append("\\\\"); // a literal backslash; the c after it is the next atom, as in JS
+            i += 1;
           }
           continue;
+        }
+        if (nxt == 'u' && hexRun(pattern, i + 2, 4)) {
+          int u = HexFormat.fromHexDigits(pattern, i + 2, i + 6);
+          if (u >= 0xD800 && u <= 0xDFFF) {
+            out.appendCodePoint(standIn(u));
+            i += 6;
+            continue;
+          }
         }
         Emit ref = refs.text.get(i);
         if (ref != null) {
@@ -452,18 +532,9 @@ public final class Parser {
             i += 2;
             continue;
           }
-          // Annex B legacy octal: up to three digits, at most \377
-          int v = nxt - '0';
-          int j = i + 2;
-          for (int max = nxt <= '3' ? 2 : 1; max > 0 && j < n; max--, j++) {
-            char o = pattern.charAt(j);
-            if (o < '0' || o > '7') {
-              break;
-            }
-            v = v * 8 + (o - '0');
-          }
-          out.append(String.format("\\x%02X", v));
-          i = j;
+          int[] oct = octal(pattern, i);
+          out.append(String.format("\\x%02X", oct[0]));
+          i = oct[1];
           continue;
         }
         // a JS identity escape keeps only the letter (\p is p, \x{41} is x{41}); an unresolved \k
@@ -477,7 +548,7 @@ public final class Parser {
         if (!identity) {
           out.append(ch);
         }
-        out.append(nxt);
+        appendUnit(out, nxt);
         i += 2;
         continue;
       }
@@ -501,6 +572,7 @@ public final class Parser {
           continue;
         }
         inClass = true;
+        atomEnd = i + (pattern.startsWith("^", i + 1) ? 2 : 1); // a ^ right after [ negates
       } else if (ch == '{') {
         int end = quantifierEnd(pattern, i);
         if (end < 0) {
@@ -543,10 +615,81 @@ public final class Parser {
           continue;
         }
       }
-      out.append(ch);
+      appendUnit(out, ch);
       i++;
     }
     return out.toString();
+  }
+
+  /**
+   * The class atom at {@code i} as {value, end}: its code unit as JS reads it, or -1 for a class
+   * escape (\d \w \s and their negations) or one it is unsure of.
+   */
+  private static int[] classAtom(String p, int i) {
+    int n = p.length();
+    char ch = p.charAt(i);
+    if (ch != '\\' || i + 1 >= n) {
+      return new int[] {ch, i + 1};
+    }
+    char nx = p.charAt(i + 1);
+    if (nx == 'u' && hexRun(p, i + 2, 4)) {
+      return new int[] {HexFormat.fromHexDigits(p, i + 2, i + 6), i + 6};
+    }
+    if (nx == 'x' && hexRun(p, i + 2, 2)) {
+      return new int[] {HexFormat.fromHexDigits(p, i + 2, i + 4), i + 4};
+    }
+    if (nx == 'c') {
+      char l = i + 2 < n ? p.charAt(i + 2) : 0;
+      boolean ok = isAsciiLetter(l) || (l >= '0' && l <= '9') || l == '_';
+      return ok ? new int[] {l & 0x1F, i + 3} : new int[] {'\\', i + 1};
+    }
+    if (nx >= '0' && nx <= '7') {
+      return octal(p, i);
+    }
+    int v =
+        switch (nx) {
+          case 'b' -> 8;
+          case 'f' -> '\f';
+          case 'n' -> '\n';
+          case 'r' -> '\r';
+          case 't' -> '\t';
+          case 'v' -> 0x0B;
+          case 'd', 'D', 'w', 'W', 's', 'S' -> -1;
+          default -> nx;
+        };
+    return new int[] {v, i + 2};
+  }
+
+  /**
+   * The Annex B legacy octal escape at {@code i} as {value, end}: up to three digits, at most \377
+   */
+  private static int[] octal(String p, int i) {
+    char d = p.charAt(i + 1);
+    int v = d - '0';
+    int j = i + 2;
+    for (int max = d <= '3' ? 2 : 1; max > 0 && j < p.length(); max--, j++) {
+      char o = p.charAt(j);
+      if (o < '0' || o > '7') {
+        break;
+      }
+      v = v * 8 + (o - '0');
+    }
+    return new int[] {v, j};
+  }
+
+  /**
+   * A class range lo-hi that overlaps D800-DFFF: BMP pieces as they are, the block as stand-ins.
+   */
+  private static void splitRange(StringBuilder out, int lo, int hi) {
+    if (lo < 0xD800) {
+      out.append(String.format("\\x{%X}-\\x{%X}", lo, Math.min(hi, 0xD7FF)));
+    }
+    out.appendCodePoint(standIn(Math.max(lo, 0xD800)))
+        .append('-')
+        .appendCodePoint(standIn(Math.min(hi, 0xDFFF)));
+    if (hi > 0xDFFF) {
+      out.append(String.format("\\x{%X}-\\x{%X}", Math.max(lo, 0xE000), hi));
+    }
   }
 
   /** The state of flag {@code flag} inside the group opening at {@code at}: {@code (?on-off:}. */
