@@ -361,7 +361,7 @@ public final class Parser {
       // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
       // where i is off). Java's u also folds a few letters JS's non-u /i does not (U+212A to k,
       // U+017F to s, U+0130 and U+0131 to i)
-      return Pattern.compile(jsToJava(pattern), flags | Pattern.UNICODE_CASE);
+      return Pattern.compile(jsToJava(pattern) + SEED, flags | Pattern.UNICODE_CASE);
     } catch (RuntimeException | StackOverflowError e) {
       String why =
           e instanceof PatternSyntaxException pse
@@ -381,6 +381,10 @@ public final class Parser {
     }
   }
 
+  // a supplementary char anywhere in the text makes Java use its surrogate-aware start and
+  // lookbehind nodes; this group matches empty
+  private static final String SEED =
+      "(?:" + new String(Character.toChars(standIn(0xD800))) + "){0}";
   // JS's \s is Unicode White_Space without U+0085, plus U+FEFF; Java's \s is ASCII-only. One
   // property lookup per char, where a list of the members is tested one by one.
   private static final String JS_SPACE = "[\\p{IsWhite_Space}\\uFEFF&&[^\\x85]]";
@@ -413,9 +417,9 @@ public final class Parser {
    *
    * <p>JS (no {@code u} flag) reads UTF-16 code units, Java code points, so each surrogate unit is
    * a stand-in code point on both sides (see {@link #unitView}): a raw or {@code \\uD83D}-escaped
-   * one in the pattern, a class range over D800-DFFF split around the block, and a lookbehind opens
-   * with an empty group holding a supplementary char, which makes Java count its length in code
-   * points.
+   * one in the pattern, and a class range over D800-DFFF split around the block. {@link
+   * #compileRegex} appends an empty group holding a supplementary char, which makes Java count a
+   * lookbehind's length in code points and start a match only on a code point boundary.
    *
    * <p>A back-reference is emitted as a numeric Java reference to the group's number in the output
    * (Java rejects a named reference to a group not yet defined in the text, but accepts a numeric
@@ -481,8 +485,8 @@ public final class Parser {
             out.append(String.format("\\x%02X", l & 0x1F));
             i += 3;
           } else {
-            out.append("\\\\c"); // a literal backslash and c, as JS reads a bare \c
-            i += 2;
+            out.append("\\\\"); // a literal backslash; the c after it is the next atom, as in JS
+            i += 1;
           }
           continue;
         }
@@ -602,14 +606,6 @@ public final class Parser {
           i = close > 0 ? close + 1 : i + 1;
           continue;
         }
-        if (cur.kind == 'b' || cur.kind == 'B') {
-          out.append(pattern, i, i + 4)
-              .append("(?:")
-              .appendCodePoint(standIn(0xD800))
-              .append("){0}");
-          i += 4;
-          continue;
-        }
       }
       appendUnit(out, ch);
       i++;
@@ -637,7 +633,7 @@ public final class Parser {
     if (nx == 'c') {
       char l = i + 2 < n ? p.charAt(i + 2) : 0;
       boolean ok = isAsciiLetter(l) || (l >= '0' && l <= '9') || l == '_';
-      return ok ? new int[] {l & 0x1F, i + 3} : new int[] {-1, i + 2};
+      return ok ? new int[] {l & 0x1F, i + 3} : new int[] {'\\', i + 1};
     }
     if (nx >= '0' && nx <= '7') {
       return octal(p, i);
