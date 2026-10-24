@@ -216,7 +216,10 @@ class ParseTest {
     assertEquals("end", m3.match(MatchInput.ip(null).withUa("x")).rule());
     assertEquals("end", m3.match(MatchInput.ip(null).withUa("x\n")).rule()); // \n is stripped first
     assertEquals("^a[\\s\\S]b\\x0A\\z", Parser.jsToJava("^a[^]b\\cJ$"));
-    assertEquals("[$]\\$a(b)(?<=c)(?<!d)", Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)(?<!d)"));
+    // each user lookbehind opens with an empty group holding U+F0000 (code-point length counting)
+    assertEquals(
+        "[$]\\$a(b)(?<=(?:\uDB80\uDC00){0}c)(?<!(?:\uDB80\uDC00){0}d)",
+        Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)(?<!d)"));
     assertEquals("a\\x0A", Parser.jsToJava("a\\cj")); // JS reads \cj as \cJ; Java would not
     // JS admits _ and $ in a group name; Java only letters and digits, so names are dropped and a
     // \k<name> back-reference reads a generated name (nothing in the SDK reads the names)
@@ -251,11 +254,10 @@ class ParseTest {
     // non-ASCII case folding under /i, and an astral char in a class, as JS reads them
     assertTrue(Parser.compileRegex("^é$", Pattern.CASE_INSENSITIVE).matcher("É").matches());
     assertFalse(Parser.compileRegex("^é$").matcher("É").matches());
-    // an astral class char stays one code point: JS's two-unit reading cannot be mirrored for
-    // find()
-    assertTrue(Parser.compileRegex("[😀]").matcher("x😀y").find());
-    assertFalse(Parser.compileRegex("^[^😀]$").matcher("😀").find());
-    assertTrue(Parser.compileRegex("^😀$").matcher("😀").matches());
+    // an astral char is two code units, as JS (no u flag) reads it
+    assertTrue(Parser.find(Parser.compileRegex("[😀]"), "x😀y"));
+    assertFalse(Parser.find(Parser.compileRegex("^[^😀]$"), "😀"));
+    assertTrue(Parser.find(Parser.compileRegex("^😀$"), "😀"));
     assertEquals("a\\{}", Parser.jsToJava("a{}"));
     assertEquals("x\\{,3", Parser.jsToJava("x{,3"));
     assertEquals("a\\{x}", Parser.jsToJava("a{x}"));
@@ -378,14 +380,45 @@ class ParseTest {
   private static void js(String p, String in, boolean want) {
     Pattern c = Parser.compileRegex(p);
     assertNotNull(c, p);
-    assertEquals(want, c.matcher(in).find(), p + " on " + in);
+    assertEquals(want, Parser.find(c, in), p + " on " + in);
   }
 
   // same as js, but the way a CASE_INSENSITIVE (path) regex compiles; node: new RegExp(p, "i")
   private static void jsi(String p, String in, boolean want) {
     Pattern c = Parser.compileRegex(p, Pattern.CASE_INSENSITIVE);
     assertNotNull(c, p);
-    assertEquals(want, c.matcher(in).find(), p + " on " + in);
+    assertEquals(want, Parser.find(c, in), p + " on " + in);
+  }
+
+  // pattern, input, JS answer: node new RegExp(p, flags).test(input), strings in UTF-16 units
+  @Test
+  void regexesReadCodeUnitsAsJsDoes() {
+    String e = "\uD83D\uDE00"; // U+1F600
+    js("^..$", e, true);
+    js("^.$", e, false);
+    js("^.$", "\uD83D", true);
+    js("evil..payload", "evil" + e + "payload", true);
+    js("^[😀]$", e, false);
+    js("^[😀]{2}$", e, true);
+    js("[😀]", "x" + e + "y", true);
+    js("^[^a]$", e, false);
+    js("^[^a]{2}$", e, true);
+    js("^\\S$", e, false);
+    js("^\\W\\W$", e, true);
+    js("^😀$", e, true);
+    js("^😀+$", e + e, false);
+    js("^😀+$", "\uD83D\uDE00\uDE00", true);
+    js("^[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]$", e, true);
+    js("\\uDE00$", "x" + e, true);
+    js("^[\\u0080-\uFFFF]{2}$", e, true);
+    js("^[a-\\uD83D]$", "\uD800", true);
+    js("^[a-\\uD83D]$", "\uE000", false);
+    js("^[\\uDE00-\uFFFF]$", "\uE000", true);
+    js("(?<=..)y", e + "y", true);
+    js("(?<!..)y", e + "y", false);
+    js("^a.*b$", "a" + e + "b", true);
+    jsi("^[^a]{2}$", e, true);
+    jsi("^é😀$", "É" + e, true);
   }
 
   @Test
