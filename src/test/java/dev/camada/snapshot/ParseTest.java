@@ -317,6 +317,9 @@ class ParseTest {
     // \c with no letter is a literal backslash and c
     js("^\\c{2}$", "\\cc", true);
     js("^\\c{2}$", ";2", false);
+    js("^\\c{x}$", "\\c{x}", true);
+    js("^\\c{x}$", "\u0018", false);
+    js("^\\c{x}$", "c{x}", false);
     js("^\\c1$", "\\c1", true);
     js("^a\\c$", "a\\c", true);
     js("^\\cé$", "\\cé", true);
