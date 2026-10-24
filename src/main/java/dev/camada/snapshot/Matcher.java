@@ -295,17 +295,22 @@ public final class Matcher {
       r.paths = forms;
       r.ua = i.ua();
       r.header = i.header();
-      for (CompiledRule rule : s.rules()) { // the order IS the precedence (§A4): first match wins
-        boolean all = true;
-        for (RuleCond cond : rule.conds()) {
-          if (!cond.test(r)) {
-            all = false;
-            break;
+      Parser.openRequestBudget();
+      try {
+        for (CompiledRule rule : s.rules()) { // the order IS the precedence (§A4): first match wins
+          boolean all = true;
+          for (RuleCond cond : rule.conds()) {
+            if (!cond.test(r)) {
+              all = false;
+              break;
+            }
+          }
+          if (all) {
+            return ruleResult(rule, s.version());
           }
         }
-        if (all) {
-          return ruleResult(rule, s.version());
-        }
+      } finally {
+        Parser.closeRequestBudget();
       }
     }
     // an exemption: every canonical spelling must agree
