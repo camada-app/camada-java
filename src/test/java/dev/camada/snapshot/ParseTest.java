@@ -300,6 +300,37 @@ class ParseTest {
     }
   }
 
+  @Test
+  void dotMatchesNelAsInJs() {
+    for (int f : new int[] {0, Pattern.CASE_INSENSITIVE}) {
+      Pattern d = Parser.compileRegex("^.$", f);
+      assertTrue(d.matcher("\u0085").matches());
+      assertTrue(d.matcher("x").matches());
+      for (String s : new String[] {"\n", "\r", "\u2028", "\u2029"}) {
+        assertFalse(d.matcher(s).matches());
+      }
+    }
+    js("evil.payload", "evil\u0085payload", true);
+    Matcher m = rulesSnapshot("[" + rule("nel", "block", "ua", null, "evil.payload") + "]");
+    assertEquals("nel", m.match(MatchInput.ip(null).withUa("evil\u0085payload")).rule());
+    assertEquals("a[^\\n\\r\\u2028-\\u2029]*b\\z", Parser.jsToJava("a.*b$"));
+    assertEquals("a\\.b", Parser.jsToJava("a\\.b"));
+    assertEquals("[.]", Parser.jsToJava("[.]"));
+    assertEquals("[^.]", Parser.jsToJava("[^.]"));
+    js("^.{2}$", "\u0085x", true);
+    js("^a.*?b$", "a\u0085b", true);
+    js("(?<=.)b", "\u0085b", true);
+    js("^(?s:.)$", "\n", true);
+    js("^(?s:.)$", "\u0085", true);
+    js("^(?s:a(?-s:.))$", "a\n", false);
+    js("^(?s:a(?-s:.))$", "a\u0085", true);
+    js("^(?s:.)(.)$", "a\n", false);
+    assertEquals("(?s:.)", Parser.jsToJava("(?s:.)"));
+    Parser.jsToJava("a).");
+    Parser.jsToJava("(.");
+    assertNull(Parser.compileRegex("a)."));
+  }
+
   // pattern, input, whether JS's new RegExp(pattern).test(input) is true (checked with node)
   private static void js(String p, String in, boolean want) {
     Pattern c = Parser.compileRegex(p);
