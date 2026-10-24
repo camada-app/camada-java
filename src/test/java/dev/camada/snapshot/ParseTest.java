@@ -698,6 +698,8 @@ class ParseTest {
       {"\\B\u0301", "t\u0301", "false"},
       {"t\\b", "t\u0301", "true"},
       {"\\bx", "\u0301x", "true"},
+      {"a\\b", "a\uD834\uDD67", "true"},
+      {"a\\B", "a\uD834\uDD67", "false"},
     };
     for (String[] v : vec) {
       boolean want = Boolean.parseBoolean(v[2]);

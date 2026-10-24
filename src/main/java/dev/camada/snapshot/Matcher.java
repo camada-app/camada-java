@@ -10,6 +10,7 @@ import java.nio.IntBuffer;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  * Matcher: sub-millisecond checks over a parsed Snapshot, ported from {@code @camada/core}
@@ -105,12 +106,12 @@ public final class Matcher {
 
   /** Exact, prefix (canonical keys) or regex membership of one path form. */
   private static boolean pathIn(
-      Set<String> exact, Set<String> prefix, List<Parser.Regex> regex, String p) {
+      Set<String> exact, Set<String> prefix, List<Pattern> regex, String p) {
     if (exact.contains(p) || (!prefix.isEmpty() && Paths.prefixed(prefix, p))) {
       return true;
     }
-    for (Parser.Regex rx : regex) {
-      if (rx.find(p, false)) {
+    for (Pattern rx : regex) {
+      if (Parser.find(rx, p)) {
         return true;
       }
     }
