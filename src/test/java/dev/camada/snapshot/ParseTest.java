@@ -15,6 +15,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -232,13 +233,15 @@ class ParseTest {
           {"/api/{id}", "/api/{id}"},
           {"x{,3", "x{,3"},
           {"[{,3}]", "{"},
-          {"a{x}", "a{x}"}
+          {"a{x}", "a{x}"},
+          {"a{,}", "a{,}"},
+          {"a{,3}", "a{,3}"}
         }) {
       Pattern p = Parser.compileRegex(c[0]);
       assertNotNull(p, c[0]);
       assertTrue(p.matcher(c[1]).matches(), c[0]);
       Pattern pi = Parser.compileRegex(c[0], Pattern.CASE_INSENSITIVE); // the path flags
-      assertTrue(pi.matcher(c[1].toUpperCase()).matches(), c[0]);
+      assertTrue(pi.matcher(c[1].toUpperCase(Locale.ROOT)).matches(), c[0]);
     }
     assertEquals("a\\{}", Parser.jsToJava("a{}"));
     assertEquals("x\\{,3", Parser.jsToJava("x{,3"));
@@ -249,7 +252,7 @@ class ParseTest {
     // quantifier
     assertEquals("a(?=b)\\{x}", Parser.jsToJava("a(?=b){x}"));
     assertFalse(Parser.compileRegex("a(?=b){x}").matcher("ab{x}").find());
-    assertNotNull(Parser.compileRegex("a(?=b){x}", Pattern.CASE_INSENSITIVE));
+    assertFalse(Parser.compileRegex("a(?=b){x}", Pattern.CASE_INSENSITIVE).matcher("AB{X}").find());
     assertTrue(Parser.compileRegex("a(?=b){2}b").matcher("ab").matches());
     assertNull(Parser.compileRegex("a{2,1}")); // JS rejects it too
     Pattern q2 = Parser.compileRegex("^a{2}$");
