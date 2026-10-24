@@ -292,6 +292,73 @@ class ParseTest {
     }
   }
 
+  // pattern, input, whether JS's new RegExp(pattern).test(input) is true (checked with node)
+  private static void js(String p, String in, boolean want) {
+    Pattern c = Parser.compileRegex(p);
+    assertNotNull(c, p);
+    assertEquals(want, c.matcher(in).find(), p + " on " + in);
+  }
+
+  @Test
+  void jsIdentityEscapesAndEmptyClassReadAsJsReadsThem() {
+    // JS escapes with no meaning stay as the bare letter; {41} is then a quantifier
+    js("^\\x{41}$", "x".repeat(41), true);
+    js("^\\x{41}$", "A", false);
+    js("^\\u{41}$", "u".repeat(41), true);
+    js("^\\u{41}$", "A", false);
+    js("^\\x4G\\u004$", "x4Gu004", true);
+    js("^\\p{L}$", "p{L}", true);
+    js("^\\p{L}$", "a", false);
+    js("^\\P{L}$", "P{L}", true);
+    js("^\\N{x}$", "N{x}", true);
+    js("^\\Q.\\E$", "QaE", true); // \Q..\E is not a quote in JS: the . stays live
+    js("^\\Qa\\E$", "a", false);
+    js("^\\a\\e\\h\\y\\z\\K\\X$", "aehyzKX", true);
+    // \c with no letter is a literal backslash and c
+    js("^\\c{2}$", "\\cc", true);
+    js("^\\c{2}$", ";2", false);
+    js("^\\c1$", "\\c1", true);
+    js("^a\\c$", "a\\c", true);
+    js("^\\cé$", "\\cé", true);
+    js("^\\cé$", "\u0089", false);
+    assertEquals("\\\\c{2}", Parser.jsToJava("\\c{2}"));
+    // inside a class \c also takes a digit or _
+    js("^[\\c1]$", "\u0011", true);
+    js("^[\\c1]$", "q", false);
+    js("^[\\c_]$", "\u001f", true);
+    js("^[\\c*]$", "\\", true);
+    js("^[\\c*]$", "c", true);
+    js("^[\\c*]$", "*", true);
+    // \k is a back-reference only when the pattern has a named group
+    js("^\\k<a>$", "k<a>", true);
+    js("^\\k<a>$", "k", false);
+    js("^[(?<n>]\\k$", "(k", true);
+    js("^\\(?<n>\\k$", "(<n>k", true); // \( is a literal, so no group: \k is k
+    js("^\\(?<n>\\k$", "(?<n>k", false);
+    assertNotNull(Parser.compileRegex("^\\(?<n>\\k$"));
+    assertEquals("^\\(?<n>k\\z", Parser.jsToJava("^\\(?<n>\\k$"));
+    // [] is an empty class: it never matches, and a quantifier on it still parses
+    js("[]", "", false);
+    js("[]", "a", false);
+    js("^[]a]$", "a]", false);
+    js("^a[]?b$", "ab", true);
+    js("^a[]{2}b$", "ab", false);
+    js("^[\\B\\p]+$", "Bp", true);
+    js("^\\é-$", "é-", true);
+    js("^\\d\\s\\w$", "1 a", true);
+    // the escapes JS knows must pass through untouched
+    String known = "\\d\\D\\w\\W\\s\\S\\b\\B\\f\\n\\r\\t";
+    assertEquals(known, Parser.jsToJava(known));
+    assertEquals("\\d{6}", Parser.jsToJava("\\d{6}"));
+    // a path regex runs CASE_INSENSITIVE
+    Pattern px = Parser.compileRegex("^\\X$", Pattern.CASE_INSENSITIVE);
+    assertNotNull(px);
+    assertTrue(px.matcher("x").find());
+    Pattern pe = Parser.compileRegex("^[]$", Pattern.CASE_INSENSITIVE);
+    assertNotNull(pe);
+    assertFalse(pe.matcher("A").find());
+  }
+
   private static String rule(String id, String action, String f, String name, String rx) {
     return "{\"id\":\""
         + id
