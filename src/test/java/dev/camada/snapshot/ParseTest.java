@@ -15,6 +15,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -228,14 +229,32 @@ class ParseTest {
     // a { that opens no valid quantifier is a literal in JS; Java would throw
     for (String[] c :
         new String[][] {
-          {"a{}", "a{}"}, {"/api/{id}", "/api/{id}"}, {"x{,3", "x{,3"}, {"[{,3}]", "{"}
+          {"a{}", "a{}"},
+          {"/api/{id}", "/api/{id}"},
+          {"x{,3", "x{,3"},
+          {"[{,3}]", "{"},
+          {"a{x}", "a{x}"},
+          {"a{,}", "a{,}"},
+          {"a{,3}", "a{,3}"}
         }) {
       Pattern p = Parser.compileRegex(c[0]);
       assertNotNull(p, c[0]);
       assertTrue(p.matcher(c[1]).matches(), c[0]);
+      Pattern pi = Parser.compileRegex(c[0], Pattern.CASE_INSENSITIVE); // the path flags
+      assertTrue(pi.matcher(c[1].toUpperCase(Locale.ROOT)).matches(), c[0]);
     }
     assertEquals("a\\{}", Parser.jsToJava("a{}"));
     assertEquals("x\\{,3", Parser.jsToJava("x{,3"));
+    assertEquals("a\\{x}", Parser.jsToJava("a{x}"));
+    assertEquals("a\\{,}", Parser.jsToJava("a{,}"));
+    assertEquals("a\\{,3}", Parser.jsToJava("a{,3}"));
+    // after a lookahead too: it compiles and, as in JS, never matches; a real {2} stays a
+    // quantifier
+    assertEquals("a(?=b)\\{x}", Parser.jsToJava("a(?=b){x}"));
+    assertFalse(Parser.compileRegex("a(?=b){x}").matcher("ab{x}").find());
+    assertFalse(Parser.compileRegex("a(?=b){x}", Pattern.CASE_INSENSITIVE).matcher("AB{X}").find());
+    assertTrue(Parser.compileRegex("a(?=b){2}b").matcher("ab").matches());
+    assertNull(Parser.compileRegex("a{2,1}")); // JS rejects it too
     Pattern q2 = Parser.compileRegex("^a{2}$");
     assertTrue(q2.matcher("aa").find());
     assertFalse(q2.matcher("a").find());
