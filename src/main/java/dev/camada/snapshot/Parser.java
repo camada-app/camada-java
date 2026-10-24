@@ -318,7 +318,9 @@ public final class Parser {
   /** As {@link #compileRegex(String)} with flags: a path regex runs CASE_INSENSITIVE (§D3). */
   public static Pattern compileRegex(String pattern, int flags) {
     try {
-      return Pattern.compile(jsToJava(pattern), flags);
+      // JS /i folds non-ASCII letters too; Java's CASE_INSENSITIVE alone folds only ASCII
+      int f = (flags & Pattern.CASE_INSENSITIVE) != 0 ? flags | Pattern.UNICODE_CASE : flags;
+      return Pattern.compile(jsToJava(pattern), f);
     } catch (RuntimeException | StackOverflowError e) {
       return null;
     }
