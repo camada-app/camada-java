@@ -6,9 +6,7 @@ import dev.camada.Json;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -335,7 +333,7 @@ public final class Parser {
               : e.getClass().getSimpleName();
       String clip = pattern.length() > 200 ? pattern.substring(0, 200) : pattern;
       Guarded.logOnce(
-          pattern,
+          clip,
           "[camada] regex never matches on this runtime, rule fails open: /" + clip + "/ " + why);
       return null;
     }
@@ -391,12 +389,8 @@ public final class Parser {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
-    boolean dotAll = false; // inside an (?s: group, where . already matches everything
-    Deque<Boolean> dotStack = new ArrayDeque<>();
     Refs refs = scanRefs(pattern);
-    boolean namedGroups = refs.namedGroups;
-    ArrayDeque<Integer> open = new ArrayDeque<>(); // n > 0 capture, 0 other
-    int groups = 0; // capturing groups opened so far
+    Group cur = refs.root; // the group the walk is in
     int i = 0;
     while (i < n) {
       char ch = pattern.charAt(i);
@@ -414,10 +408,10 @@ public final class Parser {
           }
           continue;
         }
-        String ref = refs.text.get(i);
+        Emit ref = refs.text.get(i);
         if (ref != null) {
-          out.append(ref);
-          i = nxt == 'k' ? pattern.indexOf('>', i + 3) + 1 : digitsEnd(pattern, i + 1);
+          out.append(ref.text);
+          i = ref.end;
           continue;
         }
         String sub =
@@ -461,7 +455,7 @@ public final class Parser {
                 && !passesThrough(nxt)
                 && !(nxt == 'x' && hexRun(pattern, i + 2, 2))
                 && !(nxt == 'u' && hexRun(pattern, i + 2, 4))
-                && !(nxt == 'k' && namedGroups && !inClass);
+                && !(nxt == 'k' && refs.namedGroups && !inClass);
         if (!identity) {
           out.append(ch);
         }
@@ -505,27 +499,24 @@ public final class Parser {
         continue;
       } else if (ch == '.') {
         // JS's . excludes only \n \r U+2028 U+2029; Java's also excludes U+0085
-        out.append(dotAll ? "." : "[^\\n\\r\\u2028-\\u2029]");
+        out.append(cur.dotAll ? "." : "[^\\n\\r\\u2028-\\u2029]");
         i++;
         continue;
       } else if (ch == ')') {
-        Integer cap = open.poll();
-        if (!dotStack.isEmpty()) {
-          dotAll = dotStack.pop();
-        }
-        if (cap != null && refs.marked.contains(cap)) {
-          out.append(")(?<m").append(cap).append(">))");
-          i++;
-          continue;
+        Group closed = cur;
+        if (closed.parent != null) { // a stray ) at the root stays as is
+          cur = closed.parent;
+          if (closed.marked) {
+            out.append(")(?<m").append(closed.cap).append(">))");
+            i++;
+            continue;
+          }
         }
       } else if (ch == '(') {
-        dotStack.push(dotAll);
-        dotAll = modifierDotAll(pattern, i, dotAll);
-        int cap = isCapture(pattern, i) ? ++groups : 0;
-        open.push(cap);
-        if (cap > 0) {
-          out.append(refs.marked.contains(cap) ? "(?:" : "");
-          out.append(refs.named.contains(cap) ? "(?<g" + cap + ">" : "(");
+        cur = refs.groups.get(i);
+        if (cur.cap > 0) {
+          out.append(cur.marked ? "(?:" : "");
+          out.append(cur.named ? "(?<g" + cur.cap + ">" : "(");
           int close = nameEnd(pattern, i);
           i = close > 0 ? close + 1 : i + 1;
           continue;
@@ -605,14 +596,20 @@ public final class Parser {
     final int alt; // which alternative of the parent it sits in
     final char kind;
     final int start;
+    final int cap; // its capture number, 0 if not a capture
+    final boolean dotAll; // inside an (?s: group, where . already matches everything
     int alts = 1;
     boolean minZero; // a quantifier after its ) allows zero repeats
+    boolean named; // read back: opens as (?<gN>
+    boolean marked; // read as maybe-unset: wrapped with the empty marker mN
 
-    Group(Group parent, int alt, char kind, int start) {
+    Group(Group parent, int alt, char kind, int start, int cap, boolean dotAll) {
       this.parent = parent;
       this.alt = alt;
       this.kind = kind;
       this.start = start;
+      this.cap = cap;
+      this.dotAll = dotAll;
     }
 
     boolean negative() {
@@ -624,15 +621,35 @@ public final class Parser {
     }
   }
 
-  /** A back-reference: where, the group and alternative holding it, the number or the name. */
-  private record Ref(int at, Group in, int alt, int num, String name) {}
+  /** A back-reference: where it ends, the group and alternative holding it, the number or name. */
+  private record Ref(int at, int end, Group in, int alt, int num, String name) {}
 
-  /** What the walk emits for each back-reference, and which captures need a name / a marker. */
+  /** What the walk emits for a back-reference, and where it resumes. */
+  private record Emit(String text, int end) {}
+
+  /** The group tree and what the walk emits for each back-reference. */
   private static final class Refs {
-    final Map<Integer, String> text = new HashMap<>(); // by offset of the backslash
-    final Set<Integer> named = new HashSet<>();
-    final Set<Integer> marked = new HashSet<>();
+    final Group root = new Group(null, 0, 'o', 0, 0, false);
+    final Map<Integer, Group> groups = new HashMap<>(); // by offset of the (
+    final Map<Integer, Emit> text = new HashMap<>(); // by offset of the backslash
     boolean namedGroups;
+  }
+
+  /** The kind of the group opening at the ( at {@code i}. */
+  private static char kindAt(String p, int i) {
+    if (isCapture(p, i)) {
+      return 'c';
+    }
+    if (p.startsWith("?=", i + 1)) {
+      return '=';
+    }
+    if (p.startsWith("?!", i + 1)) {
+      return '!';
+    }
+    if (p.startsWith("?<=", i + 1)) {
+      return 'b';
+    }
+    return p.startsWith("?<!", i + 1) ? 'B' : 'o';
   }
 
   /**
@@ -641,8 +658,8 @@ public final class Parser {
    */
   private static Refs scanRefs(String p) {
     int n = p.length();
-    Group root = new Group(null, 0, 'o', 0);
-    Group top = root;
+    Refs refs = new Refs();
+    Group top = refs.root;
     List<Group> caps = new ArrayList<>();
     Map<String, List<Integer>> names = new HashMap<>();
     List<Ref> sites = new ArrayList<>();
@@ -654,11 +671,15 @@ public final class Parser {
         if (nx == 'k' && i + 2 < n && p.charAt(i + 2) == '<') {
           int close = p.indexOf('>', i + 3);
           if (close > 0) {
-            sites.add(new Ref(i, top, top.alts - 1, 0, p.substring(i + 3, close)));
+            sites.add(new Ref(i, close + 1, top, top.alts - 1, 0, p.substring(i + 3, close)));
           }
-        } else if (nx >= '1' && nx <= '9' && digitsEnd(p, i + 1) - i - 1 <= 9) {
-          int num = Integer.parseInt(p.substring(i + 1, digitsEnd(p, i + 1)));
-          sites.add(new Ref(i, top, top.alts - 1, num, null));
+        } else if (nx >= '1' && nx <= '9') {
+          int end = digitsEnd(p, i + 1);
+          if (end - i - 1 <= 9) {
+            sites.add(
+                new Ref(
+                    i, end, top, top.alts - 1, Integer.parseInt(p.substring(i + 1, end)), null));
+          }
         }
         i++;
       } else if (inClass) {
@@ -668,26 +689,15 @@ public final class Parser {
       } else if (ch == '|') {
         top.alts++;
       } else if (ch == '(') {
-        boolean cap = isCapture(p, i);
-        char kind = cap ? 'c' : 'o';
-        if (!cap && p.startsWith("?", i + 1) && i + 2 < n) {
-          kind =
-              switch (p.charAt(i + 2)) {
-                case '=' -> '=';
-                case '!' -> '!';
-                case '<' ->
-                    p.startsWith("?<=", i + 1) ? 'b' : p.startsWith("?<!", i + 1) ? 'B' : 'o';
-                default -> 'o';
-              };
-        }
-        top = new Group(top, top.alts - 1, kind, i);
-        if (cap) {
+        char kind = kindAt(p, i);
+        int cap = kind == 'c' ? caps.size() + 1 : 0;
+        top = new Group(top, top.alts - 1, kind, i, cap, modifierDotAll(p, i, top.dotAll));
+        refs.groups.put(i, top);
+        if (cap > 0) {
           caps.add(top);
           int close = nameEnd(p, i);
           if (close > 0) {
-            names
-                .computeIfAbsent(p.substring(i + 3, close), k -> new ArrayList<>())
-                .add(caps.size());
+            names.computeIfAbsent(p.substring(i + 3, close), k -> new ArrayList<>()).add(cap);
           }
         }
       } else if (ch == ')' && top.parent != null) {
@@ -695,24 +705,31 @@ public final class Parser {
         top = top.parent;
       }
     }
-    Refs refs = new Refs();
     refs.namedGroups = !names.isEmpty();
     for (Ref r : sites) {
       List<Integer> targets = r.name == null ? List.of(r.num) : names.get(r.name);
       if (targets == null || r.num > caps.size()) {
         continue; // unresolved: the walk leaves it
       }
+      Set<Group> around = new HashSet<>(); // the groups holding r
+      for (Group g = r.in; g != null; g = g.parent) {
+        around.add(g);
+      }
       List<Integer> live = new ArrayList<>();
+      Read read = Read.UNSET; // of the last live target: the only one when live has one
       for (int c : targets) {
-        if (readOf(caps.get(c - 1), r) != UNSET) {
+        Read rd = readOf(caps.get(c - 1), r, around);
+        if (rd != Read.UNSET) {
           live.add(c);
+          read = rd;
         }
       }
+      String text;
       if (live.isEmpty()) {
-        refs.text.put(r.at, "(?:)");
-      } else if (live.size() == 1 && readOf(caps.get(live.get(0) - 1), r) == SET) {
-        refs.named.add(live.get(0));
-        refs.text.put(r.at, "\\k<g" + live.get(0) + ">");
+        text = "(?:)";
+      } else if (live.size() == 1 && read == Read.SET) {
+        caps.get(live.get(0) - 1).named = true;
+        text = "\\k<g" + live.get(0) + ">";
       } else {
         StringBuilder sb = new StringBuilder("(?:");
         for (int c : live) {
@@ -720,27 +737,28 @@ public final class Parser {
         }
         for (int c : live) {
           sb.append("(?!\\k<m").append(c).append(">)");
+          caps.get(c - 1).named = true;
+          caps.get(c - 1).marked = true;
         }
-        refs.text.put(r.at, sb.append(')').toString());
-        refs.named.addAll(live);
-        refs.marked.addAll(live);
+        text = sb.append(')').toString();
       }
+      refs.text.put(r.at, new Emit(text, r.end));
     }
     return refs;
   }
 
-  private static final int UNSET = 0; // JS always reads the group as unset here
-  private static final int SET = 1; // JS always reads it as set
-  private static final int MAYBE = 2;
+  private enum Read {
+    UNSET, // JS always reads the group as unset here
+    SET, // JS always reads it as set
+    MAYBE
+  }
 
-  /** How JS reads capture {@code cap} at back-reference {@code r}. */
-  private static int readOf(Group cap, Ref r) {
-    Set<Group> around = new HashSet<>(); // the groups holding r
-    for (Group g = r.in; g != null; g = g.parent) {
-      around.add(g);
-    }
+  /**
+   * How JS reads capture {@code cap} at back-reference {@code r}; {@code around} holds r's groups.
+   */
+  private static Read readOf(Group cap, Ref r, Set<Group> around) {
     if (around.contains(cap)) {
-      return UNSET;
+      return Read.UNSET;
     }
     Group cn = cap; // the child of the lowest common group l on cap's side
     while (!around.contains(cn.parent)) {
@@ -754,12 +772,12 @@ public final class Parser {
     int pAlt = cp == l ? r.alt : cp.alt;
     int pAt = cp == l ? r.at : cp.start;
     if (cn.alt != pAlt) {
-      return UNSET;
+      return Read.UNSET;
     }
     boolean certain = !cap.minZero;
     for (Group g = cap.parent; g != l; g = g.parent) {
       if (g.negative()) {
-        return UNSET;
+        return Read.UNSET;
       }
       certain &= g.alts == 1 && !g.minZero;
     }
@@ -770,9 +788,9 @@ public final class Parser {
     boolean before = cn.start < pAt;
     boolean behind = look != null && (look.kind == 'b' || look.kind == 'B');
     if (before == behind) { // a lookbehind runs right to left
-      return UNSET;
+      return Read.UNSET;
     }
-    return certain ? SET : MAYBE;
+    return certain ? Read.SET : Read.MAYBE;
   }
 
   /**
