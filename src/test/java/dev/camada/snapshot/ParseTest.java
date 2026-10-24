@@ -17,6 +17,11 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
@@ -214,7 +219,7 @@ class ParseTest {
     assertEquals("[$]\\$a(b)(?<=c)(?<!d)", Parser.jsToJava("[$]\\$a(?<n>b)(?<=c)(?<!d)"));
     assertEquals("a\\x0A", Parser.jsToJava("a\\cj")); // JS reads \cj as \cJ; Java would not
     // JS admits _ and $ in a group name; Java only letters and digits, so names are dropped and a
-    // \k<name> back-reference becomes its number (nothing in the SDK reads the names)
+    // \k<name> back-reference reads a generated name (nothing in the SDK reads the names)
     Matcher m4 =
         rulesSnapshot(
             "[{\"id\":\"u\",\"action\":\"block\",\"conds\":[{\"f\":\"path\",\"op\":\"matches\",\"v\":\"^/u/(?<user_id>\\\\d+)/(?<$x>[a-z]+)/\\\\k<user_id>0$\"}]}]");
@@ -298,6 +303,37 @@ class ParseTest {
       assertNotNull(p, (String) c[0]);
       assertEquals(c[2], p.matcher((String) c[1]).find(), c[0] + " vs " + c[1]);
     }
+  }
+
+  @Test
+  void dotMatchesNelAsInJs() {
+    js("^.$", "\u0085", true);
+    jsi("^.$", "\u0085", true);
+    js("^.$", "x", true);
+    jsi("^.$", "x", true);
+    for (String s : new String[] {"\n", "\r", "\u2028", "\u2029"}) {
+      js("^.$", s, false);
+      jsi("^.$", s, false);
+    }
+    js("evil.payload", "evil\u0085payload", true);
+    Matcher m = rulesSnapshot("[" + rule("nel", "block", "ua", null, "evil.payload") + "]");
+    assertEquals("nel", m.match(MatchInput.ip(null).withUa("evil\u0085payload")).rule());
+    assertEquals("a[^\\n\\r\\u2028-\\u2029]*b\\z", Parser.jsToJava("a.*b$"));
+    assertEquals("a\\.b", Parser.jsToJava("a\\.b"));
+    assertEquals("[.]", Parser.jsToJava("[.]"));
+    assertEquals("[^.]", Parser.jsToJava("[^.]"));
+    js("^.{2}$", "\u0085x", true);
+    js("^a.*?b$", "a\u0085b", true);
+    js("(?<=.)b", "\u0085b", true);
+    js("^(?s:.)$", "\n", true);
+    js("^(?s:.)$", "\u0085", true);
+    js("^(?s:a(?-s:.))$", "a\n", false);
+    js("^(?s:a(?-s:.))$", "a\u0085", true);
+    js("^(?s:.)(.)$", "a\n", false);
+    assertEquals("(?s:.)", Parser.jsToJava("(?s:.)"));
+    assertEquals("a)[^\\n\\r\\u2028-\\u2029]", Parser.jsToJava("a).")); // a stray ) pops nothing
+    assertEquals("([^\\n\\r\\u2028-\\u2029]", Parser.jsToJava("(."));
+    assertNull(Parser.compileRegex("a)."));
   }
 
   // pattern, input, whether JS's new RegExp(pattern).test(input) is true (checked with node)
@@ -411,6 +447,118 @@ class ParseTest {
     js("^(?<a>x\\k<a>)$", "x", true);
     assertEquals("(a)(?:\\1)", Parser.jsToJava("(a)\\1"));
     assertEquals("\\x200", Parser.jsToJava("\\400"));
+  }
+
+  // a back-reference to a group that did not participate reads as empty, as in JS (checked with
+  // node 24)
+  @Test
+  void backReferencesToUnsetGroupsReadEmpty() throws Exception {
+    js("^(?:(a)|b)\\1$", "b", true);
+    js("^(?:(a)|b)\\1$", "aa", true);
+    js("^(?:(a)|b)\\1$", "a", false);
+    js("^(?!(a))\\1b$", "b", true);
+    js("^(a)?\\1b$", "b", true);
+    js("^(a)?\\1b$", "aab", true);
+    js("^(a)?\\1b$", "ab", false);
+    js("^(?:(a)|b\\1)+$", "ab", true);
+    js("^(?:(a)|b\\1)+$", "ba", true);
+    js("(?<y>a)|(?<y>b)\\k<y>", "bb", true);
+    js("(?<y>a)|(?<y>b)\\k<y>", "b", false);
+    js("^(?:(?<y>a)|(?<y>b))\\k<y>$", "bb", true);
+    js("^(?:(?<y>a)|(?<y>b))\\k<y>$", "aa", true);
+    js("^(?:(?<y>a)|(?<y>b))\\k<y>$", "ab", false);
+    js("^(?:(?<y>a)|(?<y>b)|c)\\k<y>$", "c", true);
+    js("^(?:(?<y>a)|(?<y>b)|c)\\k<y>$", "cc", false);
+    // a group that is certainly set stays an exact \k<gN>
+    js("^(?:(a|b)c)+\\1$", "acbcb", true);
+    js("^(?:(a|b)c)+\\1$", "acbca", false);
+    js("^(?:(a)b\\1)+$", "abaaba", true);
+    js("(?=(a+))\\1b", "aaab", true);
+    js("(?<=(a))\\1b", "aab", true);
+    js("(?<=(a))\\1b", "ab", false);
+    js("(?s:(a).)\\1", "a\u0085a", true);
+    // a lookbehind runs right to left, so its group is not yet set at a back-reference to its left
+    js("(?<=(a)\\1)b", "aab", true);
+    js("(?<=(a)\\1)b", "ab", true);
+    js("(?<=(a)\\1)b", "b", false);
+    js("(?<=(?:(a)|c\\1))b", "cb", true);
+    js("(?<!(a)\\1)b", "ab", false);
+    js("(?<!(a)\\1)b", "cb", true);
+    // Java leaks a capture out of a lookaround it backtracks through; JS does not
+    js("^(?:x(?!(a))|xa)\\1$", "xa", true);
+    assertEquals("^(?:(a)())?(?:\\1|(?!\\2))b\\z", Parser.jsToJava("^(a)?\\1b$"));
+    assertEquals("^(?:(a)())?(b)(?:\\1|(?!\\2))(?:\\3)\\z", Parser.jsToJava("^(a)?(b)\\1\\2$"));
+    js("^(a)?(b)\\1\\2$", "bb", true);
+    js("^(a)?(b)\\1\\2$", "abab", true);
+    js("^(a)?(b)\\1\\2$", "abb", false);
+    // Java rejects a named reference to a group not yet defined in the text; a numeric one is fine
+    assertNull(Parser.compileRegex("(?<=(?!\\1x)(a))b"));
+    assertNull(Parser.compileRegex("(?<=(?!\\1)(b))"));
+    assertNull(Parser.compileRegex("(a)?\\1(a)?\\2(a)?\\3(a)?\\4(a)?\\5(?<=(?!\\6)(b))"));
+    assertEquals("^(?:(a)|b(?:))+\\z", Parser.jsToJava("^(?:(a)|b\\1)+$"));
+    assertEquals("(a)(?:\\1)", Parser.jsToJava("(a)\\1"));
+    // measured: the marker alternation overflows a 256 KB thread stack near 411 chars of input;
+    // the plain reference does not at 2046. This input (2047 chars) must still match
+    AtomicReference<Throwable> deep = new AtomicReference<>();
+    Thread t =
+        new Thread(
+            null,
+            () -> {
+              try {
+                js("^(?:(a)b\\1)*c", "aba".repeat(682) + "c", true);
+              } catch (Throwable e) {
+                deep.set(e);
+              }
+            },
+            "small-stack",
+            256 * 1024);
+    t.start();
+    t.join();
+    assertNull(deep.get());
+  }
+
+  // Java cannot express these: the rule fails open (null), and is logged once per pattern
+  @Test
+  void aBackReferenceJavaRejectsIsLoggedOnce() {
+    // a pattern unique to this run, so the process-global once-set and other warnings don't matter
+    String nonce = java.util.UUID.randomUUID().toString().replaceAll("[^a-f]", "");
+    String p1 = "(?<=\\1(a))b|" + nonce;
+    String p2 = "(a)(?<=\\1)b|" + nonce;
+    List<String> seen = new CopyOnWriteArrayList<>();
+    Handler h =
+        new Handler() {
+          @Override
+          public void publish(LogRecord r) {
+            if (r.getMessage().contains(nonce)) {
+              seen.add(r.getMessage());
+            }
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    Logger log = Logger.getLogger("camada");
+    log.addHandler(h);
+    try {
+      assertNull(Parser.compileRegex(p1));
+      assertNull(Parser.compileRegex(p1));
+      assertEquals(1, seen.size(), seen.toString());
+      assertTrue(seen.get(0).contains("/" + p1 + "/"), seen.get(0));
+      assertNull(Parser.compileRegex(p2));
+      assertEquals(2, seen.size());
+      // two long patterns sharing a 200-char prefix both log, on one line each
+      String pre = nonce + "\n(?<=\\1(a))b" + "x".repeat(200);
+      assertNull(Parser.compileRegex(pre + "1"));
+      assertNull(Parser.compileRegex(pre + "2"));
+      assertEquals(4, seen.size(), seen.toString());
+      assertFalse(seen.get(2).contains("\n"), seen.get(2));
+      assertNull(Parser.compileRegex(null)); // never throws
+    } finally {
+      log.removeHandler(h);
+    }
   }
 
   @Test
