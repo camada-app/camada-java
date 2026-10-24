@@ -97,7 +97,7 @@ public final class Parser {
       Set<String> tls,
       Set<String> pathsExact,
       Set<String> pathsPrefix,
-      List<Pattern> pathsRegex,
+      List<Regex> pathsRegex,
       RangeSet allow,
       RangeSet challenge,
       List<CompiledRule> rules) {} // v5 only; empty on v3/v4, and the matcher then skips them
@@ -225,8 +225,25 @@ public final class Parser {
    * One value through a {@code matches} regex. Over the cap the regex never runs (never truncate):
    * a deny rule hits, a skip rule misses.
    */
-  private static boolean capped(Pattern rx, String v, boolean deny) {
+  private static boolean capped(Regex rx, String v, boolean deny) {
     return v.length() > MAX_MATCH_INPUT ? deny : find(rx, v, deny);
+  }
+
+  // U+0300 is the first non-spacing mark (Mn), so a char below it is never one
+  static boolean hasMark(String s) {
+    for (int i = 0; i < s.length(); i++) {
+      char c = s.charAt(i);
+      if (c >= 0x300 && Character.getType(c) == Character.NON_SPACING_MARK) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Runs Java's own \b \B where {@code rx} has them and the input has no non-spacing mark. */
+  static boolean find(Regex rx, String input, boolean onFailure) {
+    Pattern p = rx.bounds() != null && !hasMark(input) ? rx.bounds() : rx.exact();
+    return find(p, input, onFailure);
   }
 
   /** Deletes every [\x00-\x1f\x7f] char: no engine then disagrees about a trailing newline. */
@@ -347,9 +364,11 @@ public final class Parser {
    * spellings java.util.regex reads differently are translated first — see {@link #jsToJava} — and
    * the default (non-UNICODE_CHARACTER_CLASS) mode keeps \d \w as JS reads them (ASCII). \s \S \b
    * \B are rewritten (see jsToJava) because Java 17's \s is ASCII-only and its \b counts non-ASCII
-   * letters as word chars. A JS-valid pattern this runtime rejects (null, so the rule never fires)
-   * is logged once per process, whatever the reason: see {@link Guarded#logOnce}. It matches code
-   * units, as JS does: run it through {@link #find}, not {@code matcher} on the raw input.
+   * letters as word chars; JDK 19+'s \b still counts a non-spacing mark after a letter as one, so a
+   * rule ({@link #compileRule}) runs Java's own \b only on input with none. A JS-valid pattern this
+   * runtime rejects (null, so the rule never fires) is logged once per process, whatever the
+   * reason: see {@link Guarded#logOnce}. It matches code units, as JS does: run it through {@link
+   * #find}, not {@code matcher} on the raw input.
    */
   public static Pattern compileRegex(String pattern) {
     return compileRegex(pattern, 0);
@@ -358,18 +377,7 @@ public final class Parser {
   /** As {@link #compileRegex(String)} with flags: a path regex runs CASE_INSENSITIVE (§D3). */
   public static Pattern compileRegex(String pattern, int flags) {
     try {
-      // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
-      // where i is off). Java's u also folds a few letters JS's non-u /i does not (U+212A to k,
-      // U+017F to s, U+0130 and U+0131 to i)
-      String js = jsToJava(pattern);
-      int bs = 0;
-      while (bs < js.length() && js.charAt(js.length() - 1 - bs) == '\\') {
-        bs++;
-      }
-      if (bs % 2 == 1) { // a trailing \ (JS rejects it) would escape SEED's ( and match anything
-        throw new PatternSyntaxException("trailing backslash", pattern, pattern.length());
-      }
-      return Pattern.compile(js + SEED, flags | Pattern.UNICODE_CASE);
+      return compile(pattern, flags, false);
     } catch (RuntimeException | StackOverflowError e) {
       String why =
           e instanceof PatternSyntaxException pse
@@ -389,6 +397,48 @@ public final class Parser {
     }
   }
 
+  private static Pattern compile(String pattern, int flags, boolean nativeBounds) {
+    // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
+    // where i is off). Java's u also folds a few letters JS's non-u /i does not (U+212A to k,
+    // U+017F to s, U+0130 and U+0131 to i)
+    String js = jsToJava(pattern, nativeBounds);
+    int bs = 0;
+    while (bs < js.length() && js.charAt(js.length() - 1 - bs) == '\\') {
+      bs++;
+    }
+    if (bs % 2 == 1) { // a trailing \ (JS rejects it) would escape SEED's ( and match anything
+      throw new PatternSyntaxException("trailing backslash", pattern, pattern.length());
+    }
+    return Pattern.compile(js + SEED, flags | Pattern.UNICODE_CASE);
+  }
+
+  // JDK-8264160 (19+): Java's \b \B read ASCII \w as JS does, except next to a non-spacing mark
+  private static final boolean NATIVE_BOUNDS = Runtime.version().feature() >= 19;
+
+  /**
+   * A compiled rule regex. {@code exact} always reads as JS; {@code bounds} is null, or the same
+   * pattern with Java's own \b \B (JDK 19+, when the pattern has one outside a class), exact on any
+   * input with no non-spacing mark.
+   */
+  public record Regex(Pattern exact, Pattern bounds) {}
+
+  /** {@code pattern} as a {@link Regex}; null where {@link #compileRegex} is. */
+  static Regex compileRule(String pattern, int flags) {
+    Pattern exact = compileRegex(pattern, flags);
+    if (exact == null) {
+      return null;
+    }
+    Pattern bounds = null;
+    if (NATIVE_BOUNDS && !jsToJava(pattern, true).equals(jsToJava(pattern, false))) {
+      try {
+        bounds = compile(pattern, flags, true); // the exact one compiled, so this logs nothing
+      } catch (RuntimeException | StackOverflowError e) {
+        bounds = null;
+      }
+    }
+    return new Regex(exact, bounds);
+  }
+
   // a supplementary char anywhere in the text makes Java use its surrogate-aware start and
   // lookbehind nodes; this group matches empty
   private static final String SEED =
@@ -399,7 +449,8 @@ public final class Parser {
   private static final String JS_NON_SPACE = "[^" + JS_SPACE.substring(1);
   // what JS's . matches: not \n \r U+2028 U+2029; an (?m: ^ or $ needs none of it beside it
   private static final String JS_NON_TERMINATOR = "[^\\n\\r\\u2028-\\u2029]";
-  // \b over Java's ASCII \w (its own \b counts non-ASCII letters as word chars)
+  // \b over Java's ASCII \w (Java 17's own \b counts non-ASCII letters as word chars, JDK 19+'s a
+  // non-spacing mark after a letter)
   private static final String WORD_BOUNDARY = "(?:(?<=\\w)(?!\\w)|(?<!\\w)(?=\\w))";
   private static final String NON_WORD_BOUNDARY = "(?:(?<=\\w)(?=\\w)|(?<!\\w)(?!\\w))";
 
@@ -418,10 +469,10 @@ public final class Parser {
    * is inside an {@code (?s:} group), and a {@code [} or {@code &&} inside a class -> escaped (Java
    * reads a union / an intersection), {@code \v} -> {@code \x0B}, {@code [\b]} -> backspace, {@code
    * \s \S} -> JS's whitespace set (a nested class, so a range next to it stays valid), {@code \b
-   * \B} outside a class -> lookarounds on Java's ASCII {@code \w}, and a decimal escape: a
-   * back-reference (or {@code \k<name>}) -> what reads the group as JS does, see below; anything
-   * else -> an Annex B legacy octal {@code \xHH} (or the bare digit for 8 and 9). Anything else the
-   * engine rejects still fails open.
+   * \B} outside a class -> lookarounds on Java's ASCII {@code \w} (or Java's own with {@code
+   * nativeBounds}), and a decimal escape: a back-reference (or {@code \k<name>}) -> what reads the
+   * group as JS does, see below; anything else -> an Annex B legacy octal {@code \xHH} (or the bare
+   * digit for 8 and 9). Anything else the engine rejects still fails open.
    *
    * <p>JS (no {@code u} flag) reads UTF-16 code units, Java code points, so each surrogate unit is
    * a stand-in code point on both sides (see {@link #unitView}): a raw or {@code \\uD83D}-escaped
@@ -457,6 +508,10 @@ public final class Parser {
    * camada-all-xuxq carries a back-reference, so reopen this if that screen is relaxed.
    */
   static String jsToJava(String pattern) {
+    return jsToJava(pattern, false);
+  }
+
+  static String jsToJava(String pattern, boolean nativeBounds) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
@@ -515,8 +570,11 @@ public final class Parser {
         String sub =
             switch (nxt) {
               case 'v' -> "\\x0B";
-              case 'b' -> inClass ? "\\x08" : WORD_BOUNDARY;
-              case 'B' -> inClass ? null : NON_WORD_BOUNDARY; // [\B] is an identity escape
+              case 'b' -> inClass ? "\\x08" : nativeBounds ? "\\b" : WORD_BOUNDARY;
+              case 'B' ->
+                  inClass
+                      ? null
+                      : nativeBounds ? "\\B" : NON_WORD_BOUNDARY; // [\B] is an identity escape
               case 's' -> JS_SPACE;
               case 'S' -> JS_NON_SPACE;
               default -> null;
@@ -1119,7 +1177,7 @@ public final class Parser {
     String first = values.isEmpty() ? "" : values.get(0);
     switch (op) {
       case "matches":
-        Pattern rx = compileRegex(first);
+        Regex rx = compileRule(first, 0);
         boolean strip = f.equals("ua") || f.equals("header");
         return r -> {
           String v = read.apply(r);
@@ -1173,7 +1231,7 @@ public final class Parser {
   private static Predicate<String> pathPred(String op, List<String> values, boolean deny) {
     String first = values.isEmpty() ? "" : values.get(0);
     if (op.equals("matches")) {
-      Pattern rx = compileRegex(first, Pattern.CASE_INSENSITIVE);
+      Regex rx = compileRule(first, Pattern.CASE_INSENSITIVE);
       return p -> rx != null && (p.length() > MAX_MATCH_INPUT ? deny : find(rx, p, deny));
     }
     if (op.equals("starts_with")) {
@@ -1292,9 +1350,9 @@ public final class Parser {
       }
     }
     IntBuffer s6 = sec.getOrDefault(5, EMPTY);
-    List<Pattern> regex = new ArrayList<>();
+    List<Regex> regex = new ArrayList<>();
     for (String p : Config.strings(meta.get("pathsRegex"))) {
-      Pattern rx = compileRegex(p, Pattern.CASE_INSENSITIVE);
+      Regex rx = compileRule(p, Pattern.CASE_INSENSITIVE);
       if (rx != null) {
         regex.add(rx);
       }
