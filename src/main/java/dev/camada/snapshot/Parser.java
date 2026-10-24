@@ -266,11 +266,42 @@ public final class Parser {
    * failure fails closed like an over-cap value, a skip rule passes false.
    */
   public static boolean find(Pattern rx, String input, boolean onFailure) {
-    try {
-      return rx.matcher(input).find();
-    } catch (StackOverflowError | RuntimeException e) {
-      return onFailure;
+    long[] left = REQUEST_LEFT.get();
+    if (left != null && left[0] <= 0) {
+      return onFailure; // the request's regex budget is spent: answer like an over-cap value
     }
+    long start = System.nanoTime();
+    long budget = MATCH_BUDGET_MS * 1_000_000L;
+    if (left != null) {
+      budget = Math.min(budget, left[0]);
+    }
+    try {
+      return rx.matcher(new Deadline(input, start + budget)).find();
+    } catch (StackOverflowError | RuntimeException e) { // incl. Deadline.RegexBudgetExceeded
+      return onFailure;
+    } finally {
+      if (left != null) {
+        left[0] -= System.nanoTime() - start;
+      }
+    }
+  }
+
+  /** Longest one customer regex may run, in milliseconds (contract regex-limit v1). */
+  public static final int MATCH_BUDGET_MS = 50;
+
+  /** Total regex time one request's rule walk may spend, in milliseconds. */
+  public static final int REQUEST_REGEX_BUDGET_MS = 100;
+
+  /** Nanoseconds of regex budget left for the rule walk on this thread; null outside a walk. */
+  private static final ThreadLocal<long[]> REQUEST_LEFT = new ThreadLocal<>();
+
+  /** Opens the per-request regex budget; the walk calls {@link #closeRequestBudget} in finally. */
+  static void openRequestBudget() {
+    REQUEST_LEFT.set(new long[] {REQUEST_REGEX_BUDGET_MS * 1_000_000L});
+  }
+
+  static void closeRequestBudget() {
+    REQUEST_LEFT.remove();
   }
 
   /**
