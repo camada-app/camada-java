@@ -232,8 +232,10 @@ class ParseTest {
         }) {
       Pattern p = Parser.compileRegex(c[0]);
       assertNotNull(p, c[0]);
-      assertTrue(p.matcher(c[1]).find(), c[0]);
+      assertTrue(p.matcher(c[1]).matches(), c[0]);
     }
+    assertEquals("a\\{}", Parser.jsToJava("a{}"));
+    assertEquals("x\\{,3", Parser.jsToJava("x{,3"));
     Pattern q2 = Parser.compileRegex("^a{2}$");
     assertTrue(q2.matcher("aa").find());
     assertFalse(q2.matcher("a").find());
