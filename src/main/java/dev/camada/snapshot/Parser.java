@@ -295,6 +295,15 @@ public final class Parser {
     return 0xF0000 + (u - 0xD800);
   }
 
+  /** Appends {@code c}, or its stand-in if it is a surrogate. */
+  private static void appendUnit(StringBuilder sb, char c) {
+    if (Character.isSurrogate(c)) {
+      sb.appendCodePoint(standIn(c));
+    } else {
+      sb.append(c);
+    }
+  }
+
   /**
    * {@code s} with every surrogate code unit as its stand-in, so java.util.regex (which reads code
    * points) sees the one-unit-per-char string JS does; {@code s} itself when it has none.
@@ -309,12 +318,7 @@ public final class Parser {
     }
     StringBuilder sb = new StringBuilder(s.length() + 8).append(s, 0, i);
     for (; i < s.length(); i++) {
-      char c = s.charAt(i);
-      if (Character.isSurrogate(c)) {
-        sb.appendCodePoint(standIn(c));
-      } else {
-        sb.append(c);
-      }
+      appendUnit(sb, s.charAt(i));
     }
     return sb.toString();
   }
@@ -483,7 +487,7 @@ public final class Parser {
           continue;
         }
         if (nxt == 'u' && hexRun(pattern, i + 2, 4)) {
-          int u = Integer.parseInt(pattern.substring(i + 2, i + 6), 16);
+          int u = HexFormat.fromHexDigits(pattern, i + 2, i + 6);
           if (u >= 0xD800 && u <= 0xDFFF) {
             out.appendCodePoint(standIn(u));
             i += 6;
@@ -516,18 +520,9 @@ public final class Parser {
             i += 2;
             continue;
           }
-          // Annex B legacy octal: up to three digits, at most \377
-          int v = nxt - '0';
-          int j = i + 2;
-          for (int max = nxt <= '3' ? 2 : 1; max > 0 && j < n; max--, j++) {
-            char o = pattern.charAt(j);
-            if (o < '0' || o > '7') {
-              break;
-            }
-            v = v * 8 + (o - '0');
-          }
-          out.append(String.format("\\x%02X", v));
-          i = j;
+          int[] oct = octal(pattern, i);
+          out.append(String.format("\\x%02X", oct[0]));
+          i = oct[1];
           continue;
         }
         // a JS identity escape keeps only the letter (\p is p, \x{41} is x{41}); an unresolved \k
@@ -541,11 +536,7 @@ public final class Parser {
         if (!identity) {
           out.append(ch);
         }
-        if (Character.isSurrogate(nxt)) {
-          out.appendCodePoint(standIn(nxt));
-        } else {
-          out.append(nxt);
-        }
+        appendUnit(out, nxt);
         i += 2;
         continue;
       }
@@ -612,16 +603,15 @@ public final class Parser {
           continue;
         }
         if (cur.kind == 'b' || cur.kind == 'B') {
-          out.append(pattern, i, i + 4).append("(?:").appendCodePoint(0xF0000).append("){0}");
+          out.append(pattern, i, i + 4)
+              .append("(?:")
+              .appendCodePoint(standIn(0xD800))
+              .append("){0}");
           i += 4;
           continue;
         }
       }
-      if (Character.isSurrogate(ch)) {
-        out.appendCodePoint(standIn(ch));
-      } else {
-        out.append(ch);
-      }
+      appendUnit(out, ch);
       i++;
     }
     return out.toString();
@@ -639,27 +629,18 @@ public final class Parser {
     }
     char nx = p.charAt(i + 1);
     if (nx == 'u' && hexRun(p, i + 2, 4)) {
-      return new int[] {Integer.parseInt(p.substring(i + 2, i + 6), 16), i + 6};
+      return new int[] {HexFormat.fromHexDigits(p, i + 2, i + 6), i + 6};
     }
     if (nx == 'x' && hexRun(p, i + 2, 2)) {
-      return new int[] {Integer.parseInt(p.substring(i + 2, i + 4), 16), i + 4};
+      return new int[] {HexFormat.fromHexDigits(p, i + 2, i + 4), i + 4};
     }
     if (nx == 'c') {
       char l = i + 2 < n ? p.charAt(i + 2) : 0;
       boolean ok = isAsciiLetter(l) || (l >= '0' && l <= '9') || l == '_';
       return ok ? new int[] {l & 0x1F, i + 3} : new int[] {-1, i + 2};
     }
-    if (nx >= '0' && nx <= '7') { // Annex B legacy octal, as the walk reads it
-      int v = nx - '0';
-      int j = i + 2;
-      for (int max = nx <= '3' ? 2 : 1; max > 0 && j < n; max--, j++) {
-        char o = p.charAt(j);
-        if (o < '0' || o > '7') {
-          break;
-        }
-        v = v * 8 + (o - '0');
-      }
-      return new int[] {v, j};
+    if (nx >= '0' && nx <= '7') {
+      return octal(p, i);
     }
     int v =
         switch (nx) {
@@ -673,6 +654,23 @@ public final class Parser {
           default -> nx;
         };
     return new int[] {v, i + 2};
+  }
+
+  /**
+   * The Annex B legacy octal escape at {@code i} as {value, end}: up to three digits, at most \377
+   */
+  private static int[] octal(String p, int i) {
+    char d = p.charAt(i + 1);
+    int v = d - '0';
+    int j = i + 2;
+    for (int max = d <= '3' ? 2 : 1; max > 0 && j < p.length(); max--, j++) {
+      char o = p.charAt(j);
+      if (o < '0' || o > '7') {
+        break;
+      }
+      v = v * 8 + (o - '0');
+    }
+    return new int[] {v, j};
   }
 
   /**
