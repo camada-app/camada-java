@@ -8,6 +8,7 @@ import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -361,32 +362,27 @@ public final class Parser {
           }
           continue;
         }
-        if (nxt == 'k' && !inClass && namedGroups) {
-          if (i + 2 < n && pattern.charAt(i + 2) == '<') {
-            int close = pattern.indexOf('>', i + 3);
-            Integer num = close < 0 ? null : named.get(pattern.substring(i + 3, close));
-            if (num != null) {
-              out.append("(?:\\").append(num).append(')'); // grouped: a digit may follow
-              i = close + 1;
-              continue;
-            }
+        if (nxt == 'k' && !inClass && i + 2 < n && pattern.charAt(i + 2) == '<') {
+          int close = pattern.indexOf('>', i + 3);
+          Integer num = close < 0 ? null : named.get(pattern.substring(i + 3, close));
+          if (num != null) {
+            out.append("(?:\\").append(num).append(')'); // grouped: a digit may follow
+            i = close + 1;
+            continue;
           }
-          out.append(ch).append(nxt); // unknown name: Java rejects it, fail open
-          i += 2;
-          continue;
         }
-        if (nxt == 'x'
-            && i + 3 < n
-            && isHex(pattern.charAt(i + 2))
-            && isHex(pattern.charAt(i + 3))) {
-          out.append(ch).append(nxt);
-        } else if (nxt == 'u' && i + 5 < n && isHex4(pattern, i + 2)) {
-          out.append(ch).append(nxt);
-        } else if (isAsciiLetter(nxt) && !passesThrough(nxt, inClass)) {
-          out.append(nxt); // JS identity escape: \p is p, \x{41} is x{41}
-        } else {
-          out.append(ch).append(nxt);
+        // a JS identity escape keeps only the letter (\p is p, \x{41} is x{41}); an unresolved \k
+        // in a pattern with named groups stays, and Java rejects it (fail open)
+        boolean identity =
+            isAsciiLetter(nxt)
+                && !passesThrough(nxt, inClass)
+                && !(nxt == 'x' && hexRun(pattern, i + 2, 2))
+                && !(nxt == 'u' && hexRun(pattern, i + 2, 4))
+                && !(nxt == 'k' && namedGroups && !inClass);
+        if (!identity) {
+          out.append(ch);
         }
+        out.append(nxt);
         i += 2;
         continue;
       }
@@ -451,15 +447,17 @@ public final class Parser {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
   }
 
-  private static boolean isHex(char c) {
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-  }
-
-  private static boolean isHex4(String s, int at) {
-    return isHex(s.charAt(at))
-        && isHex(s.charAt(at + 1))
-        && isHex(s.charAt(at + 2))
-        && isHex(s.charAt(at + 3));
+  /** Whether {@code s} has {@code len} hex digits from {@code at}. */
+  private static boolean hexRun(String s, int at, int len) {
+    if (at + len > s.length()) {
+      return false;
+    }
+    for (int j = at; j < at + len; j++) {
+      if (!HexFormat.isHexDigit(s.charAt(j))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** The letters JS and Java read alike after a backslash (x, u, c, k are handled apart). */

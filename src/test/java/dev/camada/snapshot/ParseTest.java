@@ -335,7 +335,6 @@ class ParseTest {
     js("^[(?<n>]\\k$", "(k", true);
     js("^\\(?<n>\\k$", "(<n>k", true); // \( is a literal, so no group: \k is k
     js("^\\(?<n>\\k$", "(?<n>k", false);
-    assertNotNull(Parser.compileRegex("^\\(?<n>\\k$"));
     assertEquals("^\\(?<n>k\\z", Parser.jsToJava("^\\(?<n>\\k$"));
     // [] is an empty class: it never matches, and a quantifier on it still parses
     js("[]", "", false);
