@@ -330,7 +330,9 @@ public final class Parser {
       String why =
           e instanceof PatternSyntaxException pse
               ? pse.getDescription()
-              : e.getClass().getSimpleName();
+              : e instanceof IllegalArgumentException && e.getMessage() != null
+                  ? e.getMessage()
+                  : e.getClass().getSimpleName();
       if (pattern == null) {
         return null;
       }
@@ -379,19 +381,22 @@ public final class Parser {
    * (?:\J|(?!\K))}, with the group wrapped as {@code (?:(...)())} so the empty marker group (Java
    * number K, opened just after the group closes) is set exactly when the group is: Java fails a
    * back-reference to an unset group, JS matches it as empty. A {@code \k<name>} reads every
-   * definition of the name (ES2025 duplicates). A back-reference Java cannot express (to a group
-   * after it, or outside it, within a lookbehind) is rejected and compileRegex returns null.
+   * definition of the name (ES2025 duplicates). A back-reference inside a lookbehind to a group JS
+   * evaluates before it (one to its right in the lookbehind, as JS runs it right to left) cannot be
+   * expressed, since Java runs a lookbehind left to right and reads that group as unset: it throws
+   * IllegalArgumentException and compileRegex returns null, logged once. One to a group on its left
+   * in the same lookbehind reads as unset in JS too, and compiles to {@code (?:)}.
    *
    * <p>Residuals, where Java cannot unset a capture: (A) a group inside a loop that an earlier
    * iteration set and this one skipped, read in the {@code (?:...)} alternation form: {@code
    * ^(?:(a)?b\1)+$} on "abab" is true in JS and false here; {@code ^(?:(a)|c)*\1b$} on "acab" is
    * false in JS and true here. (B) a capture leaking out of a positive lookaround: {@code
    * ^(?:(?=(a))ab|a)\1b$} on "ab" is true in JS and false here. (C) the lookbehind back-references
-   * above, which fail open, logged once. (D) Java's loops ({@code *}, {@code +}, {@code {n,m}}) do
-   * not restore captures when they backtrack out of an iteration or move to the next find() start,
-   * so a MAYBE or SET reference to a group under such a loop may read a stale value: {@code
-   * ^(b)*\1b$} on "b" is true in JS and false here (the old build was false too; the marker form
-   * never matches less than the old {@code (?:\N)}). Nothing the backend accepts since
+   * to a later group, which fail open (see above). (D) Java's loops ({@code *}, {@code +}, {@code
+   * {n,m}}) do not restore captures when they backtrack out of an iteration or move to the next
+   * find() start, so a MAYBE or SET reference to a group under such a loop may read a stale value:
+   * {@code ^(b)*\1b$} on "b" is true in JS and false here (the old build was false too; the marker
+   * form never matches less than the old {@code (?:\N)}). Nothing the backend accepts since
    * camada-all-xuxq carries a back-reference, so reopen this if that screen is relaxed.
    */
   static String jsToJava(String pattern) {
@@ -820,7 +825,10 @@ public final class Parser {
     }
     boolean before = cn.start < pAt;
     boolean behind = look != null && (look.kind == 'b' || look.kind == 'B');
-    if (before == behind) { // a lookbehind runs right to left
+    if (behind && !before) { // JS (right to left) reads cap first; Java (left to right) cannot
+      throw new IllegalArgumentException("back-reference to a later group inside a lookbehind");
+    }
+    if (before == behind) { // behind and before: JS has not evaluated cap yet
       return Read.UNSET;
     }
     return certain ? Read.SET : Read.MAYBE;

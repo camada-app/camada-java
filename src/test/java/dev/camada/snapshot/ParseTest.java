@@ -492,7 +492,9 @@ class ParseTest {
     js("^(a)?(b)\\1\\2$", "abab", true);
     js("^(a)?(b)\\1\\2$", "abb", false);
     // Java rejects a named reference to a group not yet defined in the text; a numeric one is fine
-    js("(?<=(?!\\1x)(a))b", "ab", true);
+    assertNull(Parser.compileRegex("(?<=(?!\\1x)(a))b"));
+    assertNull(Parser.compileRegex("(?<=(?!\\1)(b))"));
+    assertNull(Parser.compileRegex("(a)?\\1(a)?\\2(a)?\\3(a)?\\4(a)?\\5(?<=(?!\\6)(b))"));
     assertEquals("^(?:(a)|b(?:))+\\z", Parser.jsToJava("^(?:(a)|b\\1)+$"));
     assertEquals("(a)(?:\\1)", Parser.jsToJava("(a)\\1"));
     // measured: the marker alternation overflows a 256 KB thread stack near 411 chars of input;
