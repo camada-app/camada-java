@@ -1,5 +1,7 @@
 package dev.camada;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 /**
@@ -25,6 +27,24 @@ public final class Guarded {
     lastLogNanos = now;
     try {
       LOG.severe("[camada] suppressed error (SDK fails open): " + err);
+    } catch (RuntimeException ignored) {
+      // even logging must not raise
+    }
+  }
+
+  private static final Set<String> LOGGED_ONCE = ConcurrentHashMap.newKeySet();
+  private static final int LOGGED_ONCE_MAX = 1000;
+
+  /**
+   * Logs {@code msg} at WARNING the first time {@code key} is seen in this process. Apart from
+   * {@link #logRateLimited}'s budget, so a dropped regex cannot hide a real error. The key set is
+   * capped (about 1000), past which nothing more is logged.
+   */
+  public static void logOnce(String key, String msg) {
+    try {
+      if (LOGGED_ONCE.size() < LOGGED_ONCE_MAX && LOGGED_ONCE.add(key)) {
+        LOG.warning(msg);
+      }
     } catch (RuntimeException ignored) {
       // even logging must not raise
     }
