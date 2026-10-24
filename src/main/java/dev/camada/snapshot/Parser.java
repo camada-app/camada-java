@@ -329,15 +329,19 @@ public final class Parser {
    * letter differently), a bare {@code $} -> {@code \z} (Java's $ also accepts a final newline;
    * JS's does not), and a named group {@code (?<name>} -> a plain {@code (} with {@code \k<name>}
    * -> its number (JS admits {@code _} and {@code $} in a name, Java only letters and digits;
-   * nothing in the SDK reads the names), and a left brace that opens no {@code {n}}, {@code {n,}}
-   * or {@code {n,m}} quantifier -> escaped (JS reads it as a literal, Java throws), and a {@code [}
-   * or {@code &&} inside a class -> escaped (Java reads a union / an intersection). Anything else
-   * the engine rejects still fails open.
+   * nothing in the SDK reads the names), {@code []} -> {@code (?!)} (never matches), a JS identity
+   * escape ({@code \p}, {@code \Q}, {@code \k} with no named group, an x or u escape without its
+   * hex digits) -> the bare letter, a {@code \c} with no letter -> a literal backslash and {@code
+   * c}, a left brace that opens no {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier ->
+   * escaped (JS reads it as a literal, Java throws), and a {@code [} or {@code &&} inside a class
+   * -> escaped (Java reads a union / an intersection). Anything else the engine rejects still fails
+   * open.
    */
   static String jsToJava(String pattern) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
+    boolean namedGroups = hasNamedGroup(pattern);
     int groups = 0; // capturing groups so far: what a \k<name> back-reference becomes
     Map<String, Integer> named = new HashMap<>();
     int i = 0;
@@ -345,22 +349,44 @@ public final class Parser {
       char ch = pattern.charAt(i);
       if (ch == '\\' && i + 1 < n) {
         char nxt = pattern.charAt(i + 1);
-        if (nxt == 'c' && i + 2 < n && Character.isLetter(pattern.charAt(i + 2))) {
-          int code = Character.toUpperCase(pattern.charAt(i + 2)) - 64;
-          out.append(String.format("\\x%02X", code));
-          i += 3;
+        if (nxt == 'c') {
+          char l = i + 2 < n ? pattern.charAt(i + 2) : 0;
+          boolean ok = isAsciiLetter(l) || (inClass && ((l >= '0' && l <= '9') || l == '_'));
+          if (ok) {
+            out.append(String.format("\\x%02X", l & 0x1F));
+            i += 3;
+          } else {
+            out.append("\\\\c"); // a literal backslash and c, as JS reads a bare \c
+            i += 2;
+          }
           continue;
         }
-        if (nxt == 'k' && !inClass && i + 2 < n && pattern.charAt(i + 2) == '<') {
-          int close = pattern.indexOf('>', i + 3);
-          Integer num = close < 0 ? null : named.get(pattern.substring(i + 3, close));
-          if (num != null) {
-            out.append("(?:\\").append(num).append(')'); // grouped: a digit may follow
-            i = close + 1;
-            continue;
+        if (nxt == 'k' && !inClass && namedGroups) {
+          if (i + 2 < n && pattern.charAt(i + 2) == '<') {
+            int close = pattern.indexOf('>', i + 3);
+            Integer num = close < 0 ? null : named.get(pattern.substring(i + 3, close));
+            if (num != null) {
+              out.append("(?:\\").append(num).append(')'); // grouped: a digit may follow
+              i = close + 1;
+              continue;
+            }
           }
+          out.append(ch).append(nxt); // unknown name: Java rejects it, fail open
+          i += 2;
+          continue;
         }
-        out.append(ch).append(nxt);
+        if (nxt == 'x'
+            && i + 3 < n
+            && isHex(pattern.charAt(i + 2))
+            && isHex(pattern.charAt(i + 3))) {
+          out.append(ch).append(nxt);
+        } else if (nxt == 'u' && i + 5 < n && isHex4(pattern, i + 2)) {
+          out.append(ch).append(nxt);
+        } else if (isAsciiLetter(nxt) && !passesThrough(nxt, inClass)) {
+          out.append(nxt); // JS identity escape: \p is p, \x{41} is x{41}
+        } else {
+          out.append(ch).append(nxt);
+        }
         i += 2;
         continue;
       }
@@ -373,6 +399,11 @@ public final class Parser {
         }
         inClass = ch != ']';
       } else if (ch == '[') {
+        if (pattern.startsWith("[]", i)) {
+          out.append("(?!)"); // JS's empty class never matches
+          i += 2;
+          continue;
+        }
         if (pattern.startsWith("[^]", i)) {
           out.append("[\\s\\S]");
           i += 3;
@@ -414,6 +445,48 @@ public final class Parser {
       i++;
     }
     return out.toString();
+  }
+
+  private static boolean isAsciiLetter(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+  }
+
+  private static boolean isHex(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+  }
+
+  private static boolean isHex4(String s, int at) {
+    return isHex(s.charAt(at))
+        && isHex(s.charAt(at + 1))
+        && isHex(s.charAt(at + 2))
+        && isHex(s.charAt(at + 3));
+  }
+
+  /** The letters JS and Java read alike after a backslash (x, u, c, k are handled apart). */
+  private static boolean passesThrough(char c, boolean inClass) {
+    return "dDwWsSbfnrtv".indexOf(c) >= 0 || (!inClass && c == 'B');
+  }
+
+  /** Whether the pattern has a named group outside a class: decides what a bare \k means. */
+  private static boolean hasNamedGroup(String p) {
+    boolean inClass = false;
+    for (int i = 0; i < p.length(); i++) {
+      char ch = p.charAt(i);
+      if (ch == '\\') {
+        i++;
+      } else if (inClass) {
+        inClass = ch != ']';
+      } else if (ch == '[') {
+        inClass = true;
+      } else if (ch == '('
+          && p.startsWith("?<", i + 1)
+          && i + 3 < p.length()
+          && p.charAt(i + 3) != '='
+          && p.charAt(i + 3) != '!') {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
