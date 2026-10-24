@@ -307,6 +307,13 @@ class ParseTest {
     assertEquals(want, c.matcher(in).find(), p + " on " + in);
   }
 
+  // same as js, but the way a CASE_INSENSITIVE (path) regex compiles; node: new RegExp(p, "i")
+  private static void jsi(String p, String in, boolean want) {
+    Pattern c = Parser.compileRegex(p, Pattern.CASE_INSENSITIVE);
+    assertNotNull(c, p);
+    assertEquals(want, c.matcher(in).find(), p + " on " + in);
+  }
+
   @Test
   void jsIdentityEscapesAndEmptyClassReadAsJsReadsThem() {
     // JS escapes with no meaning stay as the bare letter; {41} is then a quantifier
@@ -357,7 +364,7 @@ class ParseTest {
     js("^\\é-$", "é-", true);
     js("^\\d\\s\\w$", "1 a", true);
     // the escapes JS knows must pass through untouched
-    String known = "\\d\\D\\w\\W\\s\\S\\b\\B\\f\\n\\r\\t";
+    String known = "\\d\\D\\w\\W\\f\\n\\r\\t";
     assertEquals(known, Parser.jsToJava(known));
     assertEquals("\\d{6}", Parser.jsToJava("\\d{6}"));
     // a path regex runs CASE_INSENSITIVE
@@ -367,6 +374,93 @@ class ParseTest {
     Pattern pe = Parser.compileRegex("^[]$", Pattern.CASE_INSENSITIVE);
     assertNotNull(pe);
     assertFalse(pe.matcher("A").find());
+  }
+
+  @Test
+  void jsVerticalTabNulBackspaceOctalAndForwardReferencesReadAsJsReadsThem() {
+    // camada-all-wrqf
+    js("^\\v$", "\n", false); // JS \v is only U+000B; Java's is all vertical whitespace
+    js("^\\v$", "\u000B", true);
+    js("^[\\v]$", "\n", false);
+    js("^\\0$", "\u0000", true);
+    js("^\\08$", "\u00008", true);
+    js("^[\\0]$", "\u0000", true);
+    js("^[\\b]$", "\b", true); // in a class \b is backspace
+    js("^[\\b]$", "b", false);
+    // legacy octal and \8 \9 when the number is not a group
+    js("^\\1$", "\u0001", true); // no groups: legacy octal
+    js("^\\8$", "8", true);
+    js("^\\81$", "81", true);
+    js("^\\18$", "\u00018", true);
+    js("^\\377$", "\u00FF", true);
+    js("^\\400$", " 0", true);
+    js("^(a)\\10$", "a\b", true);
+    js("^(a)\\10$", "aa0", false);
+    js("^(a)[\\1]$", "a\u0001", true); // no back-references inside a class
+    js("^[\\8]$", "8", true);
+    js("^(?<a>x)\\2$", "x\u0002", true);
+    // back-references that exist stay back-references
+    js("^(a)\\1$", "aa", true);
+    js("^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10$", "abcdefghijj", true);
+    js("^(?<a>x)\\k<a>$", "xx", true);
+    // forward or open references match empty
+    js("^(?:\\1(a))$", "a", true); // forward reference matches empty
+    js("^\\2(a)(b)$", "ab", true);
+    js("^(a\\1)$", "a", true);
+    js("^\\k<a>(?<a>x)$", "x", true);
+    js("^(?<a>x\\k<a>)$", "x", true);
+    assertEquals("(a)(?:\\1)", Parser.jsToJava("(a)\\1"));
+    assertEquals("\\x200", Parser.jsToJava("\\400"));
+  }
+
+  @Test
+  void jsSpaceAndWordBoundaryReadAsJsReadsThem() {
+    // camada-all-ooqj: Java's \s is ASCII-only and its \b counts non-ASCII letters as word chars
+    js("union\\s+select", "union\u00A0select", true);
+    js("^\\S$", "\u00A0", false);
+    js("^\\s$", " ", true);
+    js("^\\s$", "\uFEFF", true);
+    js("^\\s$", "\u180E", false);
+    js("^\\s$", "\u0085", false);
+    js("^[\\s-z]+$", "-z ", true);
+    js("^[\\s-z]$", "y", false);
+    js("^[a-\\s]+$", "a- ", true);
+    js("^[^\\S]$", " ", true);
+    js("^[^a\\S]$", "\u00A0", true);
+    js("^[^a\\S]$", "b", false);
+    js("^[\\S]$", " ", false);
+    js("^[^]$", " ", true);
+    js("^\\s$", "\u2028", true);
+    js("^\\S$", "\u2028", false);
+    js("^[\\S]$", "\u2028", false);
+    js("^[^]$", "\u2028", true);
+    js("a\\b", "aé", true);
+    js("a\\B", "aé", false);
+    js("\\bé", "é", false);
+    js("\\Bé", "é", true);
+    // CASE_INSENSITIVE, the way a path regex compiles
+    jsi("\\bunion\\s+select", "UNION\u00A0SELECT", true);
+    jsi("^\\S$", "\u00A0", false);
+    jsi("^[^\\s]$", "\uFEFF", false);
+    jsi("^a\\b", "A\u212A", true); // K is U+212A (Kelvin sign): JS /i keeps it a non-word char
+    jsi("^a\\B", "A\u212A", false);
+    jsi("^k\\b", "k\u017F", true); // U+017F long s is not a word char either
+    // every BMP char: \s is exactly JS's set (node, looping 0..0xFFFF), \S its complement
+    String jsSpace =
+        "\t\n\u000B\f\r \u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008"
+            + "\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF";
+    Pattern s = Parser.compileRegex("^\\s$");
+    Pattern ns = Parser.compileRegex("^[^\\S]$", Pattern.CASE_INSENSITIVE);
+    for (int cp = 0; cp <= 0xFFFF; cp++) {
+      char c = (char) cp;
+      if (!Character.isSurrogate(c)) {
+        String in = String.valueOf(c);
+        boolean want = jsSpace.indexOf(c) >= 0;
+        assertEquals(want, s.matcher(in).find(), "\\s on U+" + Integer.toHexString(c));
+        assertEquals(want, ns.matcher(in).find(), "[^\\S] on U+" + Integer.toHexString(c));
+      }
+    }
+    assertEquals("(?:(?<=\\w)(?!\\w)|(?<!\\w)(?=\\w))", Parser.jsToJava("\\b"));
   }
 
   private static String rule(String id, String action, String f, String name, String rx) {
