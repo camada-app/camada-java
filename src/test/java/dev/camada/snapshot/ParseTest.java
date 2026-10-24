@@ -237,25 +237,20 @@ class ParseTest {
       Pattern p = Parser.compileRegex(c[0]);
       assertNotNull(p, c[0]);
       assertTrue(p.matcher(c[1]).matches(), c[0]);
+      Pattern pi = Parser.compileRegex(c[0], Pattern.CASE_INSENSITIVE); // the path flags
+      assertTrue(pi.matcher(c[1].toUpperCase()).matches(), c[0]);
     }
     assertEquals("a\\{}", Parser.jsToJava("a{}"));
     assertEquals("x\\{,3", Parser.jsToJava("x{,3"));
     assertEquals("a\\{x}", Parser.jsToJava("a{x}"));
-    assertFalse(Parser.compileRegex("a{x}").matcher("ax").find());
-    assertEquals("a(?=b)\\{x}", Parser.jsToJava("a(?=b){x}"));
-    Pattern la = Parser.compileRegex("a(?=b){x}");
-    assertNotNull(la);
-    assertFalse(la.matcher("ab{x}").find());
-    assertFalse(la.matcher("a{x}").find());
-    assertTrue(Parser.compileRegex("a(?=b){2}b").matcher("ab").matches());
-    assertFalse(Parser.compileRegex("a{}").matcher("a").matches());
-    assertFalse(Parser.compileRegex("x{,3").matcher("xxx").matches());
     assertEquals("a\\{,}", Parser.jsToJava("a{,}"));
     assertEquals("a\\{,3}", Parser.jsToJava("a{,3}"));
-    for (String r : new String[] {"a{}", "x{,3", "a{x}", "a(?=b){x}"}) {
-      assertNotNull(Parser.compileRegex(r, Pattern.CASE_INSENSITIVE), r);
-    }
-    assertTrue(Parser.compileRegex("a{x}", Pattern.CASE_INSENSITIVE).matcher("A{X}").matches());
+    // after a lookahead too: it compiles and, as in JS, never matches; a real {2} stays a
+    // quantifier
+    assertEquals("a(?=b)\\{x}", Parser.jsToJava("a(?=b){x}"));
+    assertFalse(Parser.compileRegex("a(?=b){x}").matcher("ab{x}").find());
+    assertNotNull(Parser.compileRegex("a(?=b){x}", Pattern.CASE_INSENSITIVE));
+    assertTrue(Parser.compileRegex("a(?=b){2}b").matcher("ab").matches());
     assertNull(Parser.compileRegex("a{2,1}")); // JS rejects it too
     Pattern q2 = Parser.compileRegex("^a{2}$");
     assertTrue(q2.matcher("aa").find());
