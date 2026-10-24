@@ -1,11 +1,11 @@
 package dev.camada.snapshot;
 
 import dev.camada.Config;
+import dev.camada.Guarded;
 import dev.camada.Json;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * BLK snapshot parser (v3, v4, v5), ported from {@code @camada/core} src/snapshot/parse.ts, itself
@@ -312,7 +313,8 @@ public final class Parser {
    * spellings java.util.regex reads differently are translated first — see {@link #jsToJava} — and
    * the default (non-UNICODE_CHARACTER_CLASS) mode keeps \d \w as JS reads them (ASCII). \s \S \b
    * \B are rewritten (see jsToJava) because Java 17's \s is ASCII-only and its \b counts non-ASCII
-   * letters as word chars.
+   * letters as word chars. A JS-valid pattern this runtime rejects (null, so the rule never fires)
+   * is logged once per process, whatever the reason: see {@link Guarded#logOnce}.
    */
   public static Pattern compileRegex(String pattern) {
     return compileRegex(pattern, 0);
@@ -325,6 +327,20 @@ public final class Parser {
       int f = (flags & Pattern.CASE_INSENSITIVE) != 0 ? flags | Pattern.UNICODE_CASE : flags;
       return Pattern.compile(jsToJava(pattern), f);
     } catch (RuntimeException | StackOverflowError e) {
+      String why =
+          e instanceof PatternSyntaxException pse
+              ? pse.getDescription()
+              : e instanceof IllegalArgumentException && e.getMessage() != null
+                  ? e.getMessage()
+                  : e.getClass().getSimpleName();
+      if (pattern == null) {
+        return null;
+      }
+      String clip = pattern.length() > 200 ? pattern.substring(0, 200) : pattern;
+      String shown = clip.replace("\n", "\\n").replace("\r", "\\r");
+      Guarded.logOnce(
+          clip + pattern.length() + ":" + pattern.hashCode(),
+          "[camada] regex never matches on this runtime, rule fails open: /" + shown + "/ " + why);
       return null;
     }
   }
@@ -341,30 +357,54 @@ public final class Parser {
    * The JS spellings a tenant is likely to author and Java reads differently: {@code [^]} (any
    * char) -> {@code [\s\S]}, {@code \cX} -> the control character (Java's own \c reads a lower-case
    * letter differently), a bare {@code $} -> {@code \z} (Java's $ also accepts a final newline;
-   * JS's does not), and a named group {@code (?<name>} -> a plain {@code (} with {@code \k<name>}
-   * -> its number (JS admits {@code _} and {@code $} in a name, Java only letters and digits;
-   * nothing in the SDK reads the names), {@code []} -> {@code (?!)} (never matches), a JS identity
-   * escape ({@code \p}, {@code \Q}, {@code \k} with no named group, an x or u escape without its
-   * hex digits) -> the bare letter, a {@code \c} with no letter -> a literal backslash and {@code
-   * c}, a left brace that opens no {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier -> escaped
-   * (JS reads it as a literal, Java throws), and a {@code [} or {@code &&} inside a class ->
-   * escaped (Java reads a union / an intersection), {@code \v} -> {@code \x0B}, {@code [\b]} ->
-   * backspace, {@code \s \S} -> JS's whitespace set (a nested class, so a range next to it stays
-   * valid), {@code \b \B} outside a class -> lookarounds on Java's ASCII {@code \w}, and a decimal
-   * escape: a back-reference to a closed group -> {@code (?:\N)}, one to a group still open or not
-   * yet opened -> {@code (?:)} (JS matches empty), anything else -> an Annex B legacy octal {@code
-   * \xHH} (or the bare digit for 8 and 9). Inside a lookbehind a back-reference stays {@code
-   * (?:\N)}. Anything else the engine rejects still fails open.
+   * JS's does not), and a named group {@code (?<name>} -> a plain {@code (} (JS admits {@code _}
+   * and {@code $} in a name, Java only letters and digits; nothing in the SDK reads the names),
+   * {@code []} -> {@code (?!)} (never matches), a JS identity escape ({@code \p}, {@code \Q},
+   * {@code \k} with no named group, an x or u escape without its hex digits) -> the bare letter, a
+   * {@code \c} with no letter -> a literal backslash and {@code c}, a left brace that opens no
+   * {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier -> escaped (JS reads it as a literal,
+   * Java throws), a {@code .} -> {@code [^\n\r\u2028-\u2029]} (JS's also matches U+0085, Java's
+   * does not; kept as is inside an {@code (?s:} group), and a {@code [} or {@code &&} inside a
+   * class -> escaped (Java reads a union / an intersection), {@code \v} -> {@code \x0B}, {@code
+   * [\b]} -> backspace, {@code \s \S} -> JS's whitespace set (a nested class, so a range next to it
+   * stays valid), {@code \b \B} outside a class -> lookarounds on Java's ASCII {@code \w}, and a
+   * decimal escape: a back-reference (or {@code \k<name>}) -> what reads the group as JS does, see
+   * below; anything else -> an Annex B legacy octal {@code \xHH} (or the bare digit for 8 and 9).
+   * Anything else the engine rejects still fails open.
+   *
+   * <p>A back-reference is emitted as a numeric Java reference to the group's number in the output
+   * (Java rejects a named reference to a group not yet defined in the text, but accepts a numeric
+   * one). A back-reference JS always reads as unset (to a group that encloses it, sits in another
+   * alternative, is inside a negative lookaround, or is not yet evaluated, which runs right to left
+   * in a lookbehind) -> {@code (?:)}, which JS matches as empty. One to a group that is certainly
+   * set -> {@code (?:\J)}, J being the Java number of the group. Any other -> {@code
+   * (?:\J|(?!\K))}, with the group wrapped as {@code (?:(...)())} so the empty marker group (Java
+   * number K, opened just after the group closes) is set exactly when the group is: Java fails a
+   * back-reference to an unset group, JS matches it as empty. A {@code \k<name>} reads every
+   * definition of the name (ES2025 duplicates). A back-reference inside a lookbehind to a group JS
+   * evaluates before it (one to its right in the lookbehind, as JS runs it right to left) cannot be
+   * expressed, since Java runs a lookbehind left to right and reads that group as unset: it throws
+   * IllegalArgumentException and compileRegex returns null, logged once. One to a group on its left
+   * in the same lookbehind reads as unset in JS too, and compiles to {@code (?:)}.
+   *
+   * <p>Residuals, where Java cannot unset a capture: (A) a group inside a loop that an earlier
+   * iteration set and this one skipped, read in the {@code (?:...)} alternation form: {@code
+   * ^(?:(a)?b\1)+$} on "abab" is true in JS and false here; {@code ^(?:(a)|c)*\1b$} on "acab" is
+   * false in JS and true here. (B) a capture leaking out of a positive lookaround: {@code
+   * ^(?:(?=(a))ab|a)\1b$} on "ab" is true in JS and false here. (C) the lookbehind back-references
+   * to a later group, which fail open (see above). (D) Java's loops ({@code *}, {@code +}, {@code
+   * {n,m}}) do not restore captures when they backtrack out of an iteration or move to the next
+   * find() start, so a MAYBE or SET reference to a group under such a loop may read a stale value:
+   * {@code ^(b)*\1b$} on "b" is true in JS and false here (the old build was false too; the marker
+   * form never matches less than the old {@code (?:\N)}). Nothing the backend accepts since
+   * camada-all-xuxq carries a back-reference, so reopen this if that screen is relaxed.
    */
   static String jsToJava(String pattern) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
-    Map<String, Integer> named = new HashMap<>();
-    int total = scanGroups(pattern, named);
-    boolean namedGroups = !named.isEmpty();
-    ArrayDeque<Integer> open = new ArrayDeque<>(); // n > 0 capture, 0 other, -1 lookbehind
-    int groups = 0; // capturing groups opened so far
+    Refs refs = scanRefs(pattern);
+    Group cur = refs.root; // the group the walk is in
     int i = 0;
     while (i < n) {
       char ch = pattern.charAt(i);
@@ -382,14 +422,11 @@ public final class Parser {
           }
           continue;
         }
-        if (nxt == 'k' && !inClass && i + 2 < n && pattern.charAt(i + 2) == '<') {
-          int close = pattern.indexOf('>', i + 3);
-          Integer num = close < 0 ? null : named.get(pattern.substring(i + 3, close));
-          if (num != null) {
-            out.append(backRef(num, groups, open));
-            i = close + 1;
-            continue;
-          }
+        Emit ref = refs.text.get(i);
+        if (ref != null) {
+          out.append(ref.text);
+          i = ref.end;
+          continue;
         }
         String sub =
             switch (nxt) {
@@ -406,18 +443,6 @@ public final class Parser {
           continue;
         }
         if (nxt >= '0' && nxt <= '9') {
-          int end = i + 1;
-          while (end < n && pattern.charAt(end) >= '0' && pattern.charAt(end) <= '9') {
-            end++;
-          }
-          if (nxt != '0' && !inClass && end - i - 1 <= 9) {
-            int num = Integer.parseInt(pattern.substring(i + 1, end));
-            if (num <= total) {
-              out.append(backRef(num, groups, open));
-              i = end;
-              continue;
-            }
-          }
           if (nxt >= '8') {
             out.append(nxt);
             i += 2;
@@ -444,7 +469,7 @@ public final class Parser {
                 && !passesThrough(nxt)
                 && !(nxt == 'x' && hexRun(pattern, i + 2, 2))
                 && !(nxt == 'u' && hexRun(pattern, i + 2, 4))
-                && !(nxt == 'k' && namedGroups && !inClass);
+                && !(nxt == 'k' && refs.namedGroups && !inClass);
         if (!identity) {
           out.append(ch);
         }
@@ -486,15 +511,27 @@ public final class Parser {
         out.append("\\z");
         i++;
         continue;
+      } else if (ch == '.') {
+        // JS's . excludes only \n \r U+2028 U+2029; Java's also excludes U+0085
+        out.append(cur.dotAll ? "." : "[^\\n\\r\\u2028-\\u2029]");
+        i++;
+        continue;
       } else if (ch == ')') {
-        open.poll();
+        Group closed = cur;
+        if (closed.parent != null) { // a stray ) at the root stays as is
+          cur = closed.parent;
+          if (closed.marked) {
+            out.append(")())");
+            i++;
+            continue;
+          }
+        }
       } else if (ch == '(') {
-        boolean look = pattern.startsWith("?<=", i + 1) || pattern.startsWith("?<!", i + 1);
-        int close = nameEnd(pattern, i);
-        open.push(isCapture(pattern, i) ? ++groups : look ? -1 : 0);
-        if (close > 0) {
-          out.append('(');
-          i = close + 1;
+        cur = refs.groups.get(i);
+        if (cur.cap > 0) {
+          out.append(cur.marked ? "(?:(" : "(");
+          int close = nameEnd(pattern, i);
+          i = close > 0 ? close + 1 : i + 1;
           continue;
         }
       }
@@ -502,6 +539,26 @@ public final class Parser {
       i++;
     }
     return out.toString();
+  }
+
+  /** dotAll inside the group opening at {@code at}: {@code (?flags-flags:} may turn s on or off. */
+  private static boolean modifierDotAll(String p, int at, boolean cur) {
+    int j = at + 1;
+    if (j >= p.length() || p.charAt(j) != '?') {
+      return cur;
+    }
+    j++;
+    boolean on = true;
+    boolean res = cur;
+    while (j < p.length() && (isAsciiLetter(p.charAt(j)) || p.charAt(j) == '-')) {
+      if (p.charAt(j) == '-') {
+        on = false;
+      } else if (p.charAt(j) == 's') {
+        res = on;
+      }
+      j++;
+    }
+    return j < p.length() && p.charAt(j) == ':' ? res : cur;
   }
 
   private static boolean isAsciiLetter(char c) {
@@ -526,15 +583,6 @@ public final class Parser {
     return "dDwWfnrt".indexOf(c) >= 0;
   }
 
-  /**
-   * A back-reference JS reads as empty unless its group has closed (Java would never match). Inside
-   * a lookbehind it stays: JS matches those right to left, and Java rejects it anyway (fail open).
-   */
-  private static String backRef(int num, int groups, ArrayDeque<Integer> open) {
-    boolean closed = num <= groups && !open.contains(num);
-    return closed || open.contains(-1) ? "(?:\\" + num + ")" : "(?:)";
-  }
-
   /** For a ( at i: whether it opens a capturing group, plain or named. */
   private static boolean isCapture(String p, int i) {
     return i + 1 >= p.length() || p.charAt(i + 1) != '?' || nameEnd(p, i) > 0;
@@ -547,27 +595,257 @@ public final class Parser {
     return named ? p.indexOf('>', i + 3) : -1;
   }
 
-  /** The capturing-group count; fills {@code names} (name to number, first definition wins). */
-  private static int scanGroups(String p, Map<String, Integer> names) {
+  /** The index just past the digit run at {@code at}. */
+  private static int digitsEnd(String p, int at) {
+    while (at < p.length() && p.charAt(at) >= '0' && p.charAt(at) <= '9') {
+      at++;
+    }
+    return at;
+  }
+
+  /** One group of the pattern: kind c capture, o other, = ! lookahead, b B lookbehind. */
+  private static final class Group {
+    final Group parent;
+    final int alt; // which alternative of the parent it sits in
+    final char kind;
+    final int start;
+    final int cap; // its capture number, 0 if not a capture
+    final boolean dotAll; // inside an (?s: group, where . already matches everything
+    int alts = 1;
+    boolean minZero; // a quantifier after its ) allows zero repeats
+    boolean marked; // read as maybe-unset: wrapped with an empty marker group after it
+    int jn; // Java group number of the capture in the output
+    int mn; // Java group number of its marker, if marked
+
+    Group(Group parent, int alt, char kind, int start, int cap, boolean dotAll) {
+      this.parent = parent;
+      this.alt = alt;
+      this.kind = kind;
+      this.start = start;
+      this.cap = cap;
+      this.dotAll = dotAll;
+    }
+
+    boolean negative() {
+      return kind == '!' || kind == 'B';
+    }
+
+    boolean lookaround() {
+      return "=!bB".indexOf(kind) >= 0;
+    }
+  }
+
+  /** A back-reference: where it ends, the group and alternative holding it, the number or name. */
+  private record Ref(int at, int end, Group in, int alt, int num, String name) {}
+
+  /** A back-reference with the live target groups and how JS reads the last of them. */
+  private record Decided(Ref r, List<Integer> live, Read read) {}
+
+  /** What the walk emits for a back-reference, and where it resumes. */
+  private record Emit(String text, int end) {}
+
+  /** The group tree and what the walk emits for each back-reference. */
+  private static final class Refs {
+    final Group root = new Group(null, 0, 'o', 0, 0, false);
+    final Map<Integer, Group> groups = new HashMap<>(); // by offset of the (
+    final Map<Integer, Emit> text = new HashMap<>(); // by offset of the backslash
+    boolean namedGroups;
+  }
+
+  /** The kind of the group opening at the ( at {@code i}. */
+  private static char kindAt(String p, int i) {
+    if (isCapture(p, i)) {
+      return 'c';
+    }
+    if (p.startsWith("?=", i + 1)) {
+      return '=';
+    }
+    if (p.startsWith("?!", i + 1)) {
+      return '!';
+    }
+    if (p.startsWith("?<=", i + 1)) {
+      return 'b';
+    }
+    return p.startsWith("?<!", i + 1) ? 'B' : 'o';
+  }
+
+  /**
+   * The pre-pass: lexes as the walk does, builds the group tree, and decides for each resolvable
+   * back-reference whether JS reads its group as unset, set, or either (see jsToJava).
+   */
+  private static Refs scanRefs(String p) {
+    int n = p.length();
+    Refs refs = new Refs();
+    Group top = refs.root;
+    List<Group> caps = new ArrayList<>();
+    Map<String, List<Integer>> names = new HashMap<>();
+    List<Ref> sites = new ArrayList<>();
+    List<Group> events = new ArrayList<>(); // capture opens and closes, in output order
     boolean inClass = false;
-    int count = 0;
-    for (int i = 0; i < p.length(); i++) {
+    for (int i = 0; i < n; i++) {
       char ch = p.charAt(i);
       if (ch == '\\') {
+        char nx = i + 1 < n && !inClass ? p.charAt(i + 1) : 0;
+        if (nx == 'k' && i + 2 < n && p.charAt(i + 2) == '<') {
+          int close = p.indexOf('>', i + 3);
+          if (close > 0) {
+            sites.add(new Ref(i, close + 1, top, top.alts - 1, 0, p.substring(i + 3, close)));
+          }
+        } else if (nx >= '1' && nx <= '9') {
+          int end = digitsEnd(p, i + 1);
+          if (end - i - 1 <= 9) {
+            sites.add(
+                new Ref(
+                    i, end, top, top.alts - 1, Integer.parseInt(p.substring(i + 1, end)), null));
+          }
+        }
         i++;
       } else if (inClass) {
         inClass = ch != ']';
       } else if (ch == '[') {
         inClass = true;
-      } else if (ch == '(' && isCapture(p, i)) {
-        count++;
-        int close = nameEnd(p, i);
-        if (close > 0) {
-          names.putIfAbsent(p.substring(i + 3, close), count);
+      } else if (ch == '|') {
+        top.alts++;
+      } else if (ch == '(') {
+        char kind = kindAt(p, i);
+        int cap = kind == 'c' ? caps.size() + 1 : 0;
+        top = new Group(top, top.alts - 1, kind, i, cap, modifierDotAll(p, i, top.dotAll));
+        refs.groups.put(i, top);
+        if (cap > 0) {
+          caps.add(top);
+          events.add(top);
+          int close = nameEnd(p, i);
+          if (close > 0) {
+            names.computeIfAbsent(p.substring(i + 3, close), k -> new ArrayList<>()).add(cap);
+          }
         }
+      } else if (ch == ')' && top.parent != null) {
+        top.minZero = minZero(p, i + 1);
+        if (top.cap > 0) {
+          events.add(top);
+        }
+        top = top.parent;
       }
     }
-    return count;
+    refs.namedGroups = !names.isEmpty();
+    List<Decided> decided = new ArrayList<>();
+    for (Ref r : sites) {
+      List<Integer> targets = r.name == null ? List.of(r.num) : names.get(r.name);
+      if (targets == null || r.num > caps.size()) {
+        continue; // unresolved: the walk leaves it
+      }
+      Set<Group> around = new HashSet<>(); // the groups holding r
+      for (Group g = r.in; g != null; g = g.parent) {
+        around.add(g);
+      }
+      List<Integer> live = new ArrayList<>();
+      Read read = Read.UNSET; // of the last live target: the only one when live has one
+      for (int c : targets) {
+        Read rd = readOf(caps.get(c - 1), r, around);
+        if (rd != Read.UNSET) {
+          live.add(c);
+          read = rd;
+        }
+      }
+      if (read == Read.MAYBE || live.size() > 1) {
+        for (int c : live) {
+          caps.get(c - 1).marked = true;
+        }
+      }
+      decided.add(new Decided(r, live, read));
+    }
+    // number the groups as Java will see them: a marker opens as its group closes
+    int next = 0;
+    Set<Group> opened = new HashSet<>();
+    for (Group g : events) {
+      if (opened.add(g)) {
+        g.jn = ++next;
+      } else if (g.marked) {
+        g.mn = ++next;
+      }
+    }
+    for (Decided d : decided) {
+      String text;
+      if (d.live.isEmpty()) {
+        text = "(?:)";
+      } else if (d.live.size() == 1 && d.read == Read.SET) {
+        text = "(?:\\" + caps.get(d.live.get(0) - 1).jn + ")";
+      } else {
+        StringBuilder sb = new StringBuilder("(?:");
+        for (int c : d.live) {
+          sb.append('\\').append(caps.get(c - 1).jn).append('|');
+        }
+        for (int c : d.live) {
+          sb.append("(?!\\").append(caps.get(c - 1).mn).append(')');
+        }
+        text = sb.append(')').toString();
+      }
+      refs.text.put(d.r.at, new Emit(text, d.r.end));
+    }
+    return refs;
+  }
+
+  private enum Read {
+    UNSET, // JS always reads the group as unset here
+    SET, // JS always reads it as set
+    MAYBE
+  }
+
+  /**
+   * How JS reads capture {@code cap} at back-reference {@code r}; {@code around} holds r's groups.
+   */
+  private static Read readOf(Group cap, Ref r, Set<Group> around) {
+    if (around.contains(cap)) {
+      return Read.UNSET;
+    }
+    Group cn = cap; // the child of the lowest common group l on cap's side
+    while (!around.contains(cn.parent)) {
+      cn = cn.parent;
+    }
+    Group l = cn.parent;
+    Group cp = r.in; // and on r's side (r itself when it sits directly in l)
+    while (cp != l && cp.parent != l) {
+      cp = cp.parent;
+    }
+    int pAlt = cp == l ? r.alt : cp.alt;
+    int pAt = cp == l ? r.at : cp.start;
+    if (cn.alt != pAlt) {
+      return Read.UNSET;
+    }
+    boolean certain = !cap.minZero;
+    for (Group g = cap.parent; g != l; g = g.parent) {
+      if (g.negative()) {
+        return Read.UNSET;
+      }
+      certain &= g.alts == 1 && !g.minZero;
+    }
+    Group look = l;
+    while (look != null && !look.lookaround()) {
+      look = look.parent;
+    }
+    boolean before = cn.start < pAt;
+    boolean behind = look != null && (look.kind == 'b' || look.kind == 'B');
+    if (behind && !before) { // JS (right to left) reads cap first; Java (left to right) cannot
+      throw new IllegalArgumentException("back-reference to a later group inside a lookbehind");
+    }
+    if (before == behind) { // behind and before: JS has not evaluated cap yet
+      return Read.UNSET;
+    }
+    return certain ? Read.SET : Read.MAYBE;
+  }
+
+  /**
+   * Whether the quantifier at {@code at} allows zero repeats: {@code ?}, {@code *}, {@code {0..}}.
+   */
+  private static boolean minZero(String p, int at) {
+    if (at >= p.length()) {
+      return false;
+    }
+    char q = p.charAt(at);
+    if (q == '{' && quantifierEnd(p, at) > 0) {
+      return p.substring(at + 1, digitsEnd(p, at + 1)).chars().allMatch(c -> c == '0');
+    }
+    return q == '?' || q == '*';
   }
 
   /**
