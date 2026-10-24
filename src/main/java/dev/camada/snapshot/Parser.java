@@ -7,6 +7,7 @@ import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -347,19 +348,22 @@ public final class Parser {
    * escape ({@code \p}, {@code \Q}, {@code \k} with no named group, an x or u escape without its
    * hex digits) -> the bare letter, a {@code \c} with no letter -> a literal backslash and {@code
    * c}, a left brace that opens no {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier -> escaped
-   * (JS reads it as a literal, Java throws), and a {@code [} or {@code &&} inside a class ->
-   * escaped (Java reads a union / an intersection), {@code \v} -> {@code \x0B}, {@code [\b]} ->
-   * backspace, {@code \s \S} -> JS's whitespace set (a nested class, so a range next to it stays
-   * valid), {@code \b \B} outside a class -> lookarounds on Java's ASCII {@code \w}, and a decimal
-   * escape: a back-reference to a closed group -> {@code (?:\N)}, one to a group still open or not
-   * yet opened -> {@code (?:)} (JS matches empty), anything else -> an Annex B legacy octal {@code
-   * \xHH} (or the bare digit for 8 and 9). Inside a lookbehind a back-reference stays {@code
-   * (?:\N)}. Anything else the engine rejects still fails open.
+   * (JS reads it as a literal, Java throws), a {@code .} -> {@code [^\n\r\u2028-\u2029]} (JS's also
+   * matches U+0085, Java's does not; kept as is inside an {@code (?s:} group), and a {@code [} or
+   * {@code &&} inside a class -> escaped (Java reads a union / an intersection), {@code \v} -> {@code
+   * \x0B}, {@code [\b]} -> backspace, {@code \s \S} -> JS's whitespace set (a nested class, so a
+   * range next to it stays valid), {@code \b \B} outside a class -> lookarounds on Java's ASCII
+   * {@code \w}, and a decimal escape: a back-reference to a closed group -> {@code (?:\N)}, one to a
+   * group still open or not yet opened -> {@code (?:)} (JS matches empty), anything else -> an Annex
+   * B legacy octal {@code \xHH} (or the bare digit for 8 and 9). Inside a lookbehind a
+   * back-reference stays {@code (?:\N)}. Anything else the engine rejects still fails open.
    */
   static String jsToJava(String pattern) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
+    boolean dotAll = false; // inside an (?s: group, where . already matches everything
+    Deque<Boolean> dotStack = new ArrayDeque<>();
     Map<String, Integer> named = new HashMap<>();
     int total = scanGroups(pattern, named);
     boolean namedGroups = !named.isEmpty();
@@ -486,9 +490,19 @@ public final class Parser {
         out.append("\\z");
         i++;
         continue;
+      } else if (ch == '.') {
+        // JS's . excludes only \n \r U+2028 U+2029; Java's also excludes U+0085
+        out.append(dotAll ? "." : "[^\\n\\r\\u2028-\\u2029]");
+        i++;
+        continue;
       } else if (ch == ')') {
         open.poll();
+        if (!dotStack.isEmpty()) {
+          dotAll = dotStack.pop();
+        }
       } else if (ch == '(') {
+        dotStack.push(dotAll);
+        dotAll = modifierDotAll(pattern, i, dotAll);
         boolean look = pattern.startsWith("?<=", i + 1) || pattern.startsWith("?<!", i + 1);
         int close = nameEnd(pattern, i);
         open.push(isCapture(pattern, i) ? ++groups : look ? -1 : 0);
@@ -502,6 +516,26 @@ public final class Parser {
       i++;
     }
     return out.toString();
+  }
+
+  /** dotAll inside the group opening at {@code at}: {@code (?flags-flags:} may turn s on or off. */
+  private static boolean modifierDotAll(String p, int at, boolean cur) {
+    int j = at + 1;
+    if (j >= p.length() || p.charAt(j) != '?') {
+      return cur;
+    }
+    j++;
+    boolean on = true;
+    boolean res = cur;
+    while (j < p.length() && (isAsciiLetter(p.charAt(j)) || p.charAt(j) == '-')) {
+      if (p.charAt(j) == '-') {
+        on = false;
+      } else if (p.charAt(j) == 's') {
+        res = on;
+      }
+      j++;
+    }
+    return j < p.length() && p.charAt(j) == ':' ? res : cur;
   }
 
   private static boolean isAsciiLetter(char c) {
