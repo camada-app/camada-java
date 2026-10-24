@@ -17,6 +17,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -305,13 +307,13 @@ class ParseTest {
 
   @Test
   void dotMatchesNelAsInJs() {
-    for (int f : new int[] {0, Pattern.CASE_INSENSITIVE}) {
-      Pattern d = Parser.compileRegex("^.$", f);
-      assertTrue(d.matcher("\u0085").matches());
-      assertTrue(d.matcher("x").matches());
-      for (String s : new String[] {"\n", "\r", "\u2028", "\u2029"}) {
-        assertFalse(d.matcher(s).matches());
-      }
+    js("^.$", "\u0085", true);
+    jsi("^.$", "\u0085", true);
+    js("^.$", "x", true);
+    jsi("^.$", "x", true);
+    for (String s : new String[] {"\n", "\r", "\u2028", "\u2029"}) {
+      js("^.$", s, false);
+      jsi("^.$", s, false);
     }
     js("evil.payload", "evil\u0085payload", true);
     Matcher m = rulesSnapshot("[" + rule("nel", "block", "ua", null, "evil.payload") + "]");
@@ -488,7 +490,7 @@ class ParseTest {
     assertEquals("^(?:(a)|b(?:))+\\z", Parser.jsToJava("^(?:(a)|b\\1)+$"));
     assertEquals("(?<g1>a)\\k<g1>", Parser.jsToJava("(a)\\1"));
     // the alternation form recurses per loop iteration, the exact form does not
-    String[] deep = new String[1];
+    AtomicReference<Throwable> deep = new AtomicReference<>();
     Thread t =
         new Thread(
             null,
@@ -496,20 +498,20 @@ class ParseTest {
               try {
                 js("^(?:(a)b\\1)*c", "aba".repeat(682) + "c", true);
               } catch (Throwable e) {
-                deep[0] = e.toString();
+                deep.set(e);
               }
             },
             "small-stack",
             256 * 1024);
     t.start();
     t.join();
-    assertNull(deep[0]);
+    assertNull(deep.get());
   }
 
   // Java cannot express these: the rule fails open (null), and is logged once per pattern
   @Test
   void aBackReferenceJavaRejectsIsLoggedOnce() {
-    List<String> seen = new ArrayList<>();
+    List<String> seen = new CopyOnWriteArrayList<>();
     Handler h =
         new Handler() {
           @Override

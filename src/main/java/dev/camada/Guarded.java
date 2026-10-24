@@ -38,7 +38,7 @@ public final class Guarded {
   /**
    * Logs {@code msg} at WARNING the first time {@code key} is seen in this process. Apart from
    * {@link #logRateLimited}'s budget, so a dropped regex cannot hide a real error. The key set is
-   * capped (about 1000), past which nothing more is logged.
+   * capped (about 1000), past which nothing more is logged; pass a short key, the set keeps it.
    */
   public static void logOnce(String key, String msg) {
     try {
