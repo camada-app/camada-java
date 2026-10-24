@@ -2,6 +2,7 @@ package dev.camada.snapshot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -223,6 +225,25 @@ class ParseTest {
         Parser.jsToJava(
             "^(a)(?:x)(?<n>\\d)\\k<n>\\k<m>[(?<n>]")); // \k<m>: no such group, left alone
     assertNull(Parser.compileRegex("(?<user_id>a)\\k<nope>")); // an unknown name still fails open
+    // a { that opens no valid quantifier is a literal in JS; Java would throw
+    for (String[] c :
+        new String[][] {
+          {"a{}", "a{}"}, {"/api/{id}", "/api/{id}"}, {"x{,3", "x{,3"}, {"[{,3}]", "{"}
+        }) {
+      Pattern p = Parser.compileRegex(c[0]);
+      assertNotNull(p, c[0]);
+      assertTrue(p.matcher(c[1]).find(), c[0]);
+    }
+    Pattern q2 = Parser.compileRegex("^a{2}$");
+    assertTrue(q2.matcher("aa").find());
+    assertFalse(q2.matcher("a").find());
+    assertTrue(Parser.compileRegex("^a{2,}$").matcher("aaaa").find());
+    assertFalse(Parser.compileRegex("^a{2,}$").matcher("a").find());
+    assertTrue(Parser.compileRegex("^a{2,3}$").matcher("aaa").find());
+    assertFalse(Parser.compileRegex("^a{2,3}$").matcher("aaaa").find());
+    assertEquals("/api/\\{id}", Parser.jsToJava("/api/{id}"));
+    assertEquals("a\\{b a{2,3} [{,3}]", Parser.jsToJava("a{b a{2,3} [{,3}]"));
+    assertEquals("a\\{b[{]", Parser.jsToJava("a\\{b[{]"));
   }
 
   private static String rule(String id, String action, String f, String name, String rx) {
