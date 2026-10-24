@@ -5,6 +5,7 @@ import dev.camada.Json;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -309,7 +310,9 @@ public final class Parser {
    * A pattern this runtime rejects never matches, and never throws (fail open). Patterns are
    * authored as JS regexes (the analyst validates them with {@code new RegExp}), so the JS
    * spellings java.util.regex reads differently are translated first — see {@link #jsToJava} — and
-   * the default (non-UNICODE_CHARACTER_CLASS) mode keeps \d \w \b as JS reads them.
+   * the default (non-UNICODE_CHARACTER_CLASS) mode keeps \d \w as JS reads them (ASCII). \s \S \b
+   * \B are rewritten (see jsToJava) because Java 17's \s is ASCII-only and its \b counts non-ASCII
+   * letters as word chars.
    */
   public static Pattern compileRegex(String pattern) {
     return compileRegex(pattern, 0);
@@ -326,6 +329,14 @@ public final class Parser {
     }
   }
 
+  // JS's \s is Unicode White_Space without U+0085, plus U+FEFF; Java's \s is ASCII-only. One
+  // property lookup per char, where a list of the members is tested one by one.
+  private static final String JS_SPACE = "[\\p{IsWhite_Space}\\uFEFF&&[^\\x85]]";
+  private static final String JS_NON_SPACE = "[^" + JS_SPACE.substring(1);
+  // \b over Java's ASCII \w (its own \b counts non-ASCII letters as word chars)
+  private static final String WORD_BOUNDARY = "(?:(?<=\\w)(?!\\w)|(?<!\\w)(?=\\w))";
+  private static final String NON_WORD_BOUNDARY = "(?:(?<=\\w)(?=\\w)|(?<!\\w)(?!\\w))";
+
   /**
    * The JS spellings a tenant is likely to author and Java reads differently: {@code [^]} (any
    * char) -> {@code [\s\S]}, {@code \cX} -> the control character (Java's own \c reads a lower-case
@@ -337,16 +348,23 @@ public final class Parser {
    * hex digits) -> the bare letter, a {@code \c} with no letter -> a literal backslash and {@code
    * c}, a left brace that opens no {@code {n}}, {@code {n,}} or {@code {n,m}} quantifier -> escaped
    * (JS reads it as a literal, Java throws), and a {@code [} or {@code &&} inside a class ->
-   * escaped (Java reads a union / an intersection). Anything else the engine rejects still fails
-   * open.
+   * escaped (Java reads a union / an intersection), {@code \v} -> {@code \x0B}, {@code [\b]} ->
+   * backspace, {@code \s \S} -> JS's whitespace set (a nested class, so a range next to it stays
+   * valid), {@code \b \B} outside a class -> lookarounds on Java's ASCII {@code \w}, and a decimal
+   * escape: a back-reference to a closed group -> {@code (?:\N)}, one to a group still open or not
+   * yet opened -> {@code (?:)} (JS matches empty), anything else -> an Annex B legacy octal {@code
+   * \xHH} (or the bare digit for 8 and 9). Inside a lookbehind a back-reference stays {@code
+   * (?:\N)}. Anything else the engine rejects still fails open.
    */
   static String jsToJava(String pattern) {
     StringBuilder out = new StringBuilder(pattern.length() + 8);
     int n = pattern.length();
     boolean inClass = false;
-    boolean namedGroups = hasNamedGroup(pattern);
-    int groups = 0; // capturing groups so far: what a \k<name> back-reference becomes
     Map<String, Integer> named = new HashMap<>();
+    int total = scanGroups(pattern, named);
+    boolean namedGroups = !named.isEmpty();
+    ArrayDeque<Integer> open = new ArrayDeque<>(); // n > 0 capture, 0 other, -1 lookbehind
+    int groups = 0; // capturing groups opened so far
     int i = 0;
     while (i < n) {
       char ch = pattern.charAt(i);
@@ -368,16 +386,62 @@ public final class Parser {
           int close = pattern.indexOf('>', i + 3);
           Integer num = close < 0 ? null : named.get(pattern.substring(i + 3, close));
           if (num != null) {
-            out.append("(?:\\").append(num).append(')'); // grouped: a digit may follow
+            out.append(backRef(num, groups, open));
             i = close + 1;
             continue;
           }
+        }
+        String sub =
+            switch (nxt) {
+              case 'v' -> "\\x0B";
+              case 'b' -> inClass ? "\\x08" : WORD_BOUNDARY;
+              case 'B' -> inClass ? null : NON_WORD_BOUNDARY; // [\B] is an identity escape
+              case 's' -> JS_SPACE;
+              case 'S' -> JS_NON_SPACE;
+              default -> null;
+            };
+        if (sub != null) {
+          out.append(sub);
+          i += 2;
+          continue;
+        }
+        if (nxt >= '0' && nxt <= '9') {
+          int end = i + 1;
+          while (end < n && pattern.charAt(end) >= '0' && pattern.charAt(end) <= '9') {
+            end++;
+          }
+          if (nxt != '0' && !inClass && end - i - 1 <= 9) {
+            int num = Integer.parseInt(pattern.substring(i + 1, end));
+            if (num <= total) {
+              out.append(backRef(num, groups, open));
+              i = end;
+              continue;
+            }
+          }
+          if (nxt >= '8') {
+            out.append(nxt);
+            i += 2;
+            continue;
+          }
+          // Annex B legacy octal: up to three digits, at most \377
+          int v = nxt - '0';
+          int j = i + 2;
+          for (int max = nxt <= '3' ? 2 : 1; max > 0 && j < n; max--, j++) {
+            char o = pattern.charAt(j);
+            if (o < '0' || o > '7') {
+              break;
+            }
+            v = v * 8 + (o - '0');
+          }
+          out.append(String.format("\\x%02X", v));
+          i = j;
+          continue;
         }
         // a JS identity escape keeps only the letter (\p is p, \x{41} is x{41}); an unresolved \k
         // in a pattern with named groups stays, and Java rejects it (fail open)
         boolean identity =
             isAsciiLetter(nxt)
-                && !passesThrough(nxt, inClass)
+                && !passesThrough(nxt)
                 && !(nxt == 'x' && hexRun(pattern, i + 2, 2))
                 && !(nxt == 'u' && hexRun(pattern, i + 2, 4))
                 && !(nxt == 'k' && namedGroups && !inClass);
@@ -422,21 +486,16 @@ public final class Parser {
         out.append("\\z");
         i++;
         continue;
+      } else if (ch == ')') {
+        open.poll();
       } else if (ch == '(') {
-        if (i + 1 >= n || pattern.charAt(i + 1) != '?') {
-          groups++;
-        } else if (i + 2 < n
-            && pattern.charAt(i + 2) == '<'
-            && i + 3 < n
-            && pattern.charAt(i + 3) != '='
-            && pattern.charAt(i + 3) != '!') {
-          int close = pattern.indexOf('>', i + 3);
-          if (close > 0) {
-            named.put(pattern.substring(i + 3, close), ++groups);
-            out.append('(');
-            i = close + 1;
-            continue;
-          }
+        boolean look = pattern.startsWith("?<=", i + 1) || pattern.startsWith("?<!", i + 1);
+        int close = nameEnd(pattern, i);
+        open.push(isCapture(pattern, i) ? ++groups : look ? -1 : 0);
+        if (close > 0) {
+          out.append('(');
+          i = close + 1;
+          continue;
         }
       }
       out.append(ch);
@@ -462,14 +521,36 @@ public final class Parser {
     return true;
   }
 
-  /** The letters JS and Java read alike after a backslash (x, u, c, k are handled apart). */
-  private static boolean passesThrough(char c, boolean inClass) {
-    return "dDwWsSbfnrtv".indexOf(c) >= 0 || (!inClass && c == 'B');
+  /** The letters JS and Java read alike after a backslash (the rest are handled apart). */
+  private static boolean passesThrough(char c) {
+    return "dDwWfnrt".indexOf(c) >= 0;
   }
 
-  /** Whether the pattern has a named group outside a class: decides what a bare \k means. */
-  private static boolean hasNamedGroup(String p) {
+  /**
+   * A back-reference JS reads as empty unless its group has closed (Java would never match). Inside
+   * a lookbehind it stays: JS matches those right to left, and Java rejects it anyway (fail open).
+   */
+  private static String backRef(int num, int groups, ArrayDeque<Integer> open) {
+    boolean closed = num <= groups && !open.contains(num);
+    return closed || open.contains(-1) ? "(?:\\" + num + ")" : "(?:)";
+  }
+
+  /** For a ( at i: whether it opens a capturing group, plain or named. */
+  private static boolean isCapture(String p, int i) {
+    return i + 1 >= p.length() || p.charAt(i + 1) != '?' || nameEnd(p, i) > 0;
+  }
+
+  /** For a ( at i: the index of the > that closes a {@code (?<name>}, else -1. */
+  private static int nameEnd(String p, int i) {
+    boolean named =
+        p.startsWith("?<", i + 1) && !p.startsWith("?<=", i + 1) && !p.startsWith("?<!", i + 1);
+    return named ? p.indexOf('>', i + 3) : -1;
+  }
+
+  /** The capturing-group count; fills {@code names} (name to number, first definition wins). */
+  private static int scanGroups(String p, Map<String, Integer> names) {
     boolean inClass = false;
+    int count = 0;
     for (int i = 0; i < p.length(); i++) {
       char ch = p.charAt(i);
       if (ch == '\\') {
@@ -478,15 +559,15 @@ public final class Parser {
         inClass = ch != ']';
       } else if (ch == '[') {
         inClass = true;
-      } else if (ch == '('
-          && p.startsWith("?<", i + 1)
-          && i + 3 < p.length()
-          && p.charAt(i + 3) != '='
-          && p.charAt(i + 3) != '!') {
-        return true;
+      } else if (ch == '(' && isCapture(p, i)) {
+        count++;
+        int close = nameEnd(p, i);
+        if (close > 0) {
+          names.putIfAbsent(p.substring(i + 3, close), count);
+        }
       }
     }
-    return false;
+    return count;
   }
 
   /**
