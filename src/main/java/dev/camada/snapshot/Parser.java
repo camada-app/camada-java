@@ -395,7 +395,10 @@ public final class Parser {
   /** Longest one customer regex may run, in milliseconds (contract regex-limit v1). */
   public static final int MATCH_BUDGET_MS = 50;
 
-  /** Total regex time one request's rule walk may spend, in milliseconds. */
+  /**
+   * Total regex time one request's match decision (rule walk plus meta pathsRegex) may spend, in
+   * milliseconds.
+   */
   public static final int REQUEST_REGEX_BUDGET_MS = 100;
 
   /**
@@ -406,7 +409,7 @@ public final class Parser {
 
   /**
    * Opens the per-request regex budget for the whole match decision (rule walk plus the block
-   * side's meta pathsRegex); the walk calls {@link #closeRequestBudget} in finally.
+   * side's meta pathsRegex); the match decision calls {@link #closeRequestBudget} in finally.
    */
   static void openRequestBudget() {
     REQUEST_LEFT.set(new long[] {REQUEST_REGEX_BUDGET_MS * 1_000_000L});

@@ -1019,12 +1019,14 @@ class EngineTest {
       int stack = 64 * 1024;
       String ua = "a".repeat(2000) + "b";
       String uaRx = "^(?:a|b)*c";
-      String longPath = "/a".repeat(1024);
-      String pathRx = "^(/[a-z0-9]+)*$";
+      // a flat path (one segment, so canonicalisation copes on this stack) whose meta regex
+      // recurses once per char: the engine fails inside the meta pathsRegex, not in Paths.forms
+      String flatPath = "/" + "a".repeat(2000) + "b";
+      String pathRx = "^/(?:a|b)*c|^(/[a-z0-9]+)*$";
       assertTrue(
           overflowsOn(stack, uaRx, ua), "the engine must fail for this test to mean anything");
       assertTrue(
-          overflowsOn(stack, pathRx, longPath),
+          overflowsOn(stack, pathRx, flatPath),
           "the engine must fail for this test to mean anything");
       analyst.container = "v5";
       analyst.metaExtra.put("pathsRegex", List.of(pathRx));
@@ -1039,9 +1041,8 @@ class EngineTest {
                   "conds",
                   List.of(Map.of("f", "ua", "op", "matches", "v", uaRx)))));
       Host h = new Host();
-      // on this stack the path canonicalisation overflows before any matcher runs, so the
-      // envelope fails open
-      assertEquals(200, onAStack(h, new Call("GET", longPath), stack).status());
+      // a meta pathsRegex that overflows on a canonicalisable path answers block (deny=true)
+      assertEquals(403, onAStack(h, new Call("GET", flatPath), stack).status());
       assertEquals(403, onAStack(h, new Call("GET", "/").header("user-agent", ua), stack).status());
       // the same patterns still decide what they can run
       assertEquals(403, onAStack(h, new Call("GET", "/a/b"), stack).status());
