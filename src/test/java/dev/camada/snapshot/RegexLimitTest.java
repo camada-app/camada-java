@@ -29,7 +29,7 @@ import org.junit.jupiter.api.TestFactory;
  * from camada-core's regex-limit-vectors.json (pinned by sha256), never a local copy.
  */
 class RegexLimitTest {
-  static final String PIN = "ec076bfb26f12f0f90ffa42bb7b975c6f905afdfe01ba2caeedf6295dd533696";
+  static final String PIN = "da294143dd317792b38abc7097bb8185bfac32833d13d7a043f2101794a7c13b";
   static final String REL = "regex-limit/regex-limit-vectors.json";
   static final Map<String, Object> V = Fixtures.readMeta(REL);
   static final Duration LOOSE = Duration.ofSeconds(20);
@@ -105,9 +105,19 @@ class RegexLimitTest {
 
   @TestFactory
   Stream<DynamicTest> refusedFallBackToNative() {
+    return nativeCases("refused");
+  }
+
+  @TestFactory
+  Stream<DynamicTest> acceptedMatchNative() {
+    return nativeCases("accepted_match");
+  }
+
+  static Stream<DynamicTest> nativeCases(String key) {
+    assertFalse(rows(key).isEmpty());
     Map<String, Object> base = Json.asMap(V.get("refused_rule"));
     List<DynamicTest> out = new ArrayList<>();
-    for (Map<String, Object> r : rows("refused")) {
+    for (Map<String, Object> r : rows(key)) {
       int k = 0;
       for (Object c : (List<?>) r.get("cases")) {
         Map<String, Object> cond = new HashMap<>();
