@@ -367,6 +367,10 @@ class ParseTest {
     js("(?<!a*)b", "b", false);
     js("(?<=a{2,}b)c", "abc", false);
     js("(?<=a{2,}b)c", "aabc", true);
+    // JS SyntaxError (nothing to repeat): still fails open
+    assertNull(Parser.compileRegex("(?<=a+*b)c"));
+    assertNull(Parser.compileRegex("(?<=a++b)c"));
+    assertNull(Parser.compileRegex("(?<=a+??b)c"));
     assertEquals("(?<=ab)c", Parser.jsToJava("(?<=a+b)c"));
     assertEquals("(?<=\\w=)&", Parser.jsToJava("(?<=\\w+=)&"));
     assertEquals("(?<=x)b", Parser.jsToJava("(?<=a*x)b"));
@@ -374,7 +378,7 @@ class ParseTest {
     assertEquals("(?<!a{3}b)c", Parser.jsToJava("(?<!a{3,}b)c"));
     assertEquals("(?<=[ab]c)d", Parser.jsToJava("(?<=[ab]+c)d"));
     assertEquals("(?<=(a){1,65535}b)c", Parser.jsToJava("(?<=(a)+b)c")); // a group stays
-    assertEquals("\\(?<=a+b)", Parser.jsToJava("\\(?<=a+b)")); // escaped: no lookbehind
+    assertEquals("\\(?<=a+b\\)", Parser.jsToJava("\\(?<=a+b\\)")); // escaped: no lookbehind
     assertEquals("[(?<=a+]", Parser.jsToJava("[(?<=a+]")); // in a class
     js("(?<=a+)b(?<=b+)c", "aabbc", false); // the b before c has no a before it
     js("(?<=a+)b(?<=b+)c", "abc", true);
