@@ -590,8 +590,8 @@ class ParseTest {
     assertTrue(Parser.find(Parser.compileRegex("\\\\1", Pattern.CASE_INSENSITIVE), "\\1" + em));
   }
 
-  // residual F: JDK 17 lacks Unicode 14-16 case pairs and folds an /i range by x, upper and
-  // lower(upper) only (node 24: true); single atoms agree on every JDK, the rest on JDK 26+
+  // residual F (node 24: true): a single ǅ atom or [ǅ] agrees on every JDK; a range over it and the
+  // Unicode 14 pair A7C0/A7C1 only on JDK 26+
   @Test
   void ciFoldResidualFAgreesOnNewJdk() {
     js("(?i:\u01C5)", "\u01C4", true);
