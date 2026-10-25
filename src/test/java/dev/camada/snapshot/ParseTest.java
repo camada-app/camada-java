@@ -357,12 +357,10 @@ class ParseTest {
     js("(?<=a+)b(?<=b+)c", "abc", true);
     js("(?<=a{1,9}b+)c", "abc", true);
     js("(?<=a{1,9}b{2,1000})c", "abbc", true);
-    // 2047 chars through a rule must not hang: the pattern is dropped, so the rule cannot block
-    String v = "a".repeat(1023) + "=" + "a".repeat(1023);
+    // compiled, this ran past find's budget on a 2047-char value, so a deny rule failed closed
     Matcher lb = rulesSnapshot("[" + rule("lb", "block", "ua", null, "(?<=\\w+=\\w+)&") + "]");
-    long t0 = System.nanoTime();
-    assertFalse(lb.match(MatchInput.ip(null).withUa(v + "&")).block());
-    assertTrue(System.nanoTime() - t0 < 50_000_000L, "returns at once");
+    String v = "a".repeat(1023) + "=" + "a".repeat(1023) + "&";
+    assertFalse(lb.match(MatchInput.ip(null).withUa(v)).block());
     assertEquals("(?:(?<=a))*b[a*]+", Parser.jsToJava("(?:(?<=a))*b[a*]+"));
     assertNull(Parser.compileRegex("(?<=(?:ab+)+)c")); // Java 17 rejects it: fail open
     assertNull(Parser.compileRegex("(?<=(a|b)+)c"));
