@@ -590,6 +590,24 @@ class ParseTest {
     assertTrue(Parser.find(Parser.compileRegex("\\\\1", Pattern.CASE_INSENSITIVE), "\\1" + em));
   }
 
+  // residual F: JDK 17 lacks Unicode 14-16 case pairs and tests a /i range as x, upper,
+  // lower(upper);
+  // node 24 answers true. Single atoms agree on every JDK; the rest is pinned only where JDK is new
+  @Test
+  void ciFoldResidualFAgreesOnNewJdk() {
+    boolean old = Runtime.version().feature() < 26;
+    js("(?i:\u01C5)", "\u01C4", true);
+    js("(?i:[\u01C5])", "\u01C4", true);
+    jsi("\u01C5", "\u01C4", true);
+    jsi("[\u01C5]", "\u01C4", true);
+    if (!old) {
+      js("(?i:[\u01C5-\u01C5])", "\u01C4", true);
+      jsi("[\u01C5-\u01C5]", "\u01C4", true);
+      js("(?i:\uA7C0)", "\uA7C1", true);
+      jsi("\uA7C0", "\uA7C1", true);
+    }
+  }
+
   // a back-reference to a group that did not participate reads as empty, as in JS (checked with
   // node 24)
   @Test
