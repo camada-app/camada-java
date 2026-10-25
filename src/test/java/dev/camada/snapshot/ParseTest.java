@@ -400,6 +400,11 @@ class ParseTest {
     js("[\\c-\\uDFFF]", "\uE000", false);
     js("[\\c-\\uDFFF]", "\\", true);
     js("^[\\c-\\uDFFF]$", "\uD900", true);
+    js("^[\\c[]$", "\\", true);
+    js("^[\\c[]$", "c", true);
+    js("^[\\c[]$", "[", true);
+    js("^[\\c[]$", "k", false);
+    js("^[\\c[]$", "\u001b", false);
     js("^.$", e, false);
     js("^.$", "\uD83D", true);
     js("evil..payload", "evil" + e + "payload", true);
