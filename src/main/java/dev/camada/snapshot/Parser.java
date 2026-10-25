@@ -606,9 +606,10 @@ public final class Parser {
    * ways. JDK 17 (Unicode 13) lacks the case pairs added in Unicode 14-16, so {@code /Ꟁ/i} on "ꟁ"
    * is false there (true in node 24 and on JDK 26); JDK 26 (Unicode 17) in turn folds U+A7CE/U+A7CF
    * and U+A7D2..U+A7D5, which node 24 does not. And before JDK 26 a class range under /i tests only
-   * x, its upper and the lower of that, so a range holding some members of a 3+-member case class
-   * misses the rest: {@code /[ǅ-ǅ]/i} on "Ǆ" is false on JDK 17 (true in node 24 and on JDK 26),
-   * likewise the Greek sigma/beta/theta classes and U+1C80-U+1C88. A single atom agrees everywhere.
+   * the input char x, its upper and the lower of that, so a range holding some members of a
+   * 3+-member case class may miss the rest: {@code /[ǅ-ǅ]/i} on "Ǆ" is false on JDK 17 (true in
+   * node 24 and on JDK 26), likewise the Greek sigma/beta/theta classes and U+1C80-U+1C88. For this
+   * range gap, a single atom or one-member class agrees on every JDK.
    */
   static String jsToJava(String pattern) {
     return jsToJava(pattern, false);
