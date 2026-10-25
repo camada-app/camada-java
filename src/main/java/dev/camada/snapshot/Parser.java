@@ -1398,14 +1398,14 @@ public final class Parser {
    * condition, in condition order, so an ip condition consumes the next one.
    */
   private static RuleCond compileCond(Map<String, Object> c, List<Pair> sets, boolean deny) {
+    String f = String.valueOf(c.getOrDefault("f", ""));
+    String op = String.valueOf(c.getOrDefault("op", ""));
     // camada-all-zpbv: a matches value that is not a non-empty string never matches (it would
     // otherwise be coerced to a regex, '' matching everything); first, so it beats the over-cap
     // path.
-    if ("matches".equals(c.get("op")) && !(c.get("v") instanceof String sv && !sv.isEmpty())) {
+    if (op.equals("matches") && !(c.get("v") instanceof String sv && !sv.isEmpty())) {
       return r -> false;
     }
-    String f = String.valueOf(c.getOrDefault("f", ""));
-    String op = String.valueOf(c.getOrDefault("op", ""));
     if (f.equals("path")) { // every path op reads the canonical forms (see Paths), never fieldValue
       Predicate<String> pred = pathPred(op, values(c.get("v")), deny);
       return r -> Paths.hit(pred, r.paths, deny);
