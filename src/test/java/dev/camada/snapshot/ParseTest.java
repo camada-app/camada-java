@@ -145,6 +145,68 @@ class ParseTest {
     assertEquals("path", m2.match(MatchInput.ip(null).withPath("/dump")).reason());
   }
 
+  private static Matcher metaPaths(String regexJson, String rulesJson) {
+    return new Matcher(
+        Parser.parse(
+            container(0x424C4B35),
+            meta(
+                "{\"version\":\"v\",\"pathsRegex\":"
+                    + regexJson
+                    + ",\"rules\":"
+                    + rulesJson
+                    + "}")));
+  }
+
+  @Test
+  void metaPathsRegexIsCaseInsensitive() {
+    Matcher m = metaPaths("[\"^/DUMP$\"]", "[]");
+    assertEquals("path", m.match(MatchInput.ip(null).withPath("/dump")).reason());
+    assertFalse(m.match(MatchInput.ip(null).withPath("/dumpx")).block());
+  }
+
+  @Test
+  void metaPathsRegexRefusedPatternsNeverMatch() {
+    Matcher m = metaPaths("[\"(?<=a\"]", "[]");
+    for (String p : new String[] {"/a", "/ac", "/abc"}) {
+      assertFalse(m.match(MatchInput.ip(null).withPath(p)).block(), p);
+    }
+  }
+
+  @Test
+  void metaPathsRegexOverTheCapAnswersBlock() {
+    Matcher m = metaPaths("[\"^/never$\"]", "[]");
+    assertEquals(
+        "path",
+        m.match(MatchInput.ip(null).withPath("/" + "a".repeat(Parser.MAX_MATCH_INPUT))).reason());
+    assertFalse(
+        m.match(MatchInput.ip(null).withPath("/" + "a".repeat(Parser.MAX_MATCH_INPUT - 1)))
+            .block());
+  }
+
+  @Test
+  void metaPathsRegexSharesTheRuleWalksBudget() throws Exception {
+    java.lang.reflect.Field f = Parser.class.getDeclaredField("REQUEST_LEFT");
+    f.setAccessible(true);
+    ThreadLocal<?> left = (ThreadLocal<?>) f.get(null);
+    Matcher m =
+        metaPaths(
+            "[\"^/never$\"]",
+            "[{\"id\":\"h\",\"action\":\"block\",\"conds\":[{\"f\":\"header\",\"op\":\"is\",\"name\":\"x-spend\",\"v\":\"never\"}]}]");
+    // the getter spends the open budget, then misses: the meta regex must see the spent budget
+    assertEquals(
+        "path",
+        m.match(
+                MatchInput.ip(null)
+                    .withPath("/x")
+                    .withHeader(
+                        n -> {
+                          ((long[]) left.get())[0] = 0;
+                          return null;
+                        }))
+            .reason());
+    assertFalse(m.match(MatchInput.ip(null).withPath("/x").withHeader(n -> null)).block());
+  }
+
   @Test
   void asnConditionsCompareAsStringsAndUnanswerableFieldsNeverFire() {
     Matcher m =
