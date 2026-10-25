@@ -555,7 +555,10 @@ public final class Parser {
    * ({@code *}, {@code +}, {@code {n,m}}) do not restore captures when they backtrack out of an
    * iteration or move to the next find() start, so a maybe-unset reference to a group under such a
    * loop may read a stale value: {@code ^(b)*\1b$} on "b" is true in JS and false here. SET reads
-   * under a loop still compile.
+   * under a loop still compile. (E) On JDK 17 an /i back-reference to a group holding a stand-in
+   * (an astral char, or a {@link #STAND_IN} letter) never matches: its case-insensitive
+   * back-reference steps code points over a length counted in chars, so {@code /^(ſ)\1$/i} on "ſſ"
+   * is false there (true on JDK 26).
    */
   static String jsToJava(String pattern) {
     return jsToJava(pattern, false);
