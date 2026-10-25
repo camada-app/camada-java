@@ -398,10 +398,16 @@ public final class Parser {
   /** Total regex time one request's rule walk may spend, in milliseconds. */
   public static final int REQUEST_REGEX_BUDGET_MS = 100;
 
-  /** Nanoseconds of regex budget left for the rule walk on this thread; null outside a walk. */
+  /**
+   * Nanoseconds of regex budget left for the whole match decision (rule walk plus the block side's
+   * meta pathsRegex) on this thread; null outside one.
+   */
   private static final ThreadLocal<long[]> REQUEST_LEFT = new ThreadLocal<>();
 
-  /** Opens the per-request regex budget; the walk calls {@link #closeRequestBudget} in finally. */
+  /**
+   * Opens the per-request regex budget for the whole match decision (rule walk plus the block
+   * side's meta pathsRegex); the walk calls {@link #closeRequestBudget} in finally.
+   */
   static void openRequestBudget() {
     REQUEST_LEFT.set(new long[] {REQUEST_REGEX_BUDGET_MS * 1_000_000L});
   }
