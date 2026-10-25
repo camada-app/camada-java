@@ -1046,11 +1046,13 @@ public final class Parser {
       return Read.UNSET;
     }
     boolean certain = !cap.minZero;
+    boolean inLook = false; // a positive lookaround between cap and l
     for (Group g = cap.parent; g != l; g = g.parent) {
       if (g.negative()) {
         return Read.UNSET;
       }
       certain &= g.alts == 1 && !g.minZero;
+      inLook |= g.lookaround();
     }
     Group look = l;
     while (look != null && !look.lookaround()) {
@@ -1073,11 +1075,9 @@ public final class Parser {
             "back-reference Java may read stale: a maybe-unset group under a loop");
       }
     }
-    for (Group g = cap.parent; g != l; g = g.parent) {
-      if (g.kind == '=' || g.kind == 'b') {
-        throw new IllegalArgumentException(
-            "back-reference Java may read stale: a maybe-unset group inside a positive lookaround");
-      }
+    if (inLook) {
+      throw new IllegalArgumentException(
+          "back-reference Java may read stale: a maybe-unset group inside a positive lookaround");
     }
     return Read.MAYBE;
   }
