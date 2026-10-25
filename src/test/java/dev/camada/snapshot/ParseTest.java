@@ -590,6 +590,22 @@ class ParseTest {
     assertTrue(Parser.find(Parser.compileRegex("\\\\1", Pattern.CASE_INSENSITIVE), "\\1" + em));
   }
 
+  // residual F (node 24: true): a single ǅ atom or [ǅ] agrees on every JDK; a range over it and the
+  // Unicode 14 pair A7C0/A7C1 only on JDK 26+
+  @Test
+  void ciFoldResidualFAgreesOnNewJdk() {
+    js("(?i:\u01C5)", "\u01C4", true);
+    js("(?i:[\u01C5])", "\u01C4", true);
+    jsi("\u01C5", "\u01C4", true);
+    jsi("[\u01C5]", "\u01C4", true);
+    if (Runtime.version().feature() >= 26) {
+      js("(?i:[\u01C5-\u01C5])", "\u01C4", true);
+      jsi("[\u01C5-\u01C5]", "\u01C4", true);
+      js("(?i:\uA7C0)", "\uA7C1", true);
+      jsi("\uA7C0", "\uA7C1", true);
+    }
+  }
+
   // a back-reference to a group that did not participate reads as empty, as in JS (checked with
   // node 24)
   @Test
