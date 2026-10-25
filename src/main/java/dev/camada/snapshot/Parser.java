@@ -597,10 +597,12 @@ public final class Parser {
    * +} becomes {@code {1,K}} and {@code {n,}} or a larger {@code {n,m}} becomes {@code {n,K}}, with
    * K = {@link #LOOKBEHIND_MAX}. Java 17 still rejects a loop over a group whose length varies (an
    * alternation, a capture of varying length, or a nested variable quantifier), as in {@code
-   * (?<=(a|b)+)c} and {@code (?<=(?:ab+)+)c}, so compileRegex returns null, logged (fail open). One
-   * unbounded quantifier costs a find about n^2 steps on n chars, within {@link #find}'s budget. A
-   * lookbehind with two or more returns null, logged (fail open), because Java tries every start of
-   * it at each position, so a find costs about n^(k+1) there.
+   * (?<=(a|b)+)c} and {@code (?<=(?:ab+)+)c}, so compileRegex returns null, logged (fail open).
+   * Java tries every start of a lookbehind at each position: with two or more unbounded quantifiers
+   * in one lookbehind a find takes seconds on a 2 KB value, so compileRegex returns null, logged
+   * (fail open). One still compiles; it costs about n^2 steps when the lookbehind matches, but one
+   * that fails after the quantifier ({@code (?<=a+b)c} on a run of a) can still exceed {@link
+   * #find}'s budget, which answers the rule's onFailure.
    */
   static String jsToJava(String pattern) {
     return jsToJava(pattern, false);

@@ -347,7 +347,7 @@ class ParseTest {
     js("(?:(?<=a))*b", "b", true);
     assertEquals("(?<=ab{1,65535})c", Parser.jsToJava("(?<=ab+)c"));
     assertEquals("(?<=a{0,65535}?c{3}d{1,9})", Parser.jsToJava("(?<=a*?c{3}d{1,9})"));
-    // two or more capped quantifiers in one lookbehind: Java's find is n^(k+1), so fail open
+    // two or more capped quantifiers in one lookbehind: a find takes seconds, so fail open
     assertThrows(IllegalArgumentException.class, () -> Parser.jsToJava("(?<=a*?b{2,})"));
     assertNull(Parser.compileRegex("(?<=\\w+=\\w+)&"));
     assertNull(Parser.compileRegex("(?<=a+b+)c"));
