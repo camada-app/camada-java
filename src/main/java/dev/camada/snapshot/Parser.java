@@ -539,6 +539,7 @@ public final class Parser {
     int n = pattern.length();
     boolean inClass = false;
     int atomEnd = 0; // in a class: where the atom (or range) being walked ends
+    int litDash = -1; // in a class: a - before a class escape, a literal in JS (Annex B)
     Refs refs = scanRefs(pattern);
     Group cur = refs.root; // the group the walk is in
     int i = 0;
@@ -559,8 +560,15 @@ public final class Parser {
               i = hi[1];
               continue;
             }
+          } else {
+            litDash = lo[1]; // [a-\w] is {a, -, \w}; Java rejects the bare range
           }
         }
+      }
+      if (inClass && i == litDash) {
+        out.append("\\-");
+        i++;
+        continue;
       }
       if (ch == '\\' && i + 1 < n) {
         char nxt = pattern.charAt(i + 1);
