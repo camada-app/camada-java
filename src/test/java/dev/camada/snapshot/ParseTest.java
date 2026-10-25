@@ -530,6 +530,25 @@ class ParseTest {
     assertEquals("\\x200", Parser.jsToJava("\\400"));
   }
 
+  // residual E: JDK 17 mis-reads a /i back-reference over a stand-in (node 24: both true); find
+  // answers onFailure there, the JS answer where the runtime reads it right
+  @Test
+  void ciBackReferenceOverStandInFailsOpenOnOldJdk() {
+    boolean old = Runtime.version().feature() < 26;
+    for (boolean onFailure : new boolean[] {false, true}) {
+      boolean want = old ? onFailure : true;
+      Pattern a = Parser.compileRegex("^(ſ)\\1", Pattern.CASE_INSENSITIVE);
+      Pattern b = Parser.compileRegex("^(ß)\\1$", Pattern.CASE_INSENSITIVE);
+      Pattern c = Parser.compileRegex("^(😀)\\1$", Pattern.CASE_INSENSITIVE);
+      assertEquals(want, Parser.find(a, "ſſab", onFailure));
+      assertEquals(want, Parser.find(b, "ßß", onFailure));
+      assertEquals(want, Parser.find(c, "😀😀", onFailure));
+    }
+    // no stand-in in the input, or no /i: unchanged
+    assertTrue(Parser.find(Parser.compileRegex("^(a)\\1", Pattern.CASE_INSENSITIVE), "aAb"));
+    assertTrue(Parser.find(Parser.compileRegex("^(ß)\\1$"), "ßß"));
+  }
+
   // a back-reference to a group that did not participate reads as empty, as in JS (checked with
   // node 24)
   @Test
