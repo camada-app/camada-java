@@ -1272,40 +1272,7 @@ public final class Parser {
         i++;
       } else if (s.startsWith("(?<=", i) || s.startsWith("(?<!", i)) {
         out.append(s, i, i + 4);
-        i += 4;
-        while (true) {
-          int a = simpleAtomEnd(s, i);
-          if (a < 0 || a >= n) break;
-          char q = s.charAt(a);
-          int e;
-          String min;
-          if (q == '*' || q == '?') {
-            e = a + 1;
-            min = "0";
-          } else if (q == '+') {
-            e = a + 1;
-            min = "1";
-          } else if (q == '{' && (e = quantifierEnd(s, a)) > 0) {
-            min = s.substring(a + 1, digitsEnd(s, a + 1));
-            int comma = s.indexOf(',', a);
-            if (comma > 0 && comma < e - 2) { // {n,m}: n > m is a SyntaxError, leave it
-              String max = s.substring(comma + 1, e - 1);
-              if (new java.math.BigInteger(min).compareTo(new java.math.BigInteger(max)) > 0) break;
-            }
-          } else {
-            break;
-          }
-          if (e < n && s.charAt(e) == '?') e++; // lazy
-          String digits = min.replaceFirst("^0+(?=.)", "");
-          if (digits.equals("0")) {
-            i = e; // optional: drop atom and quantifier, look at what follows
-            continue;
-          }
-          out.append(s, i, a);
-          if (!digits.equals("1")) out.append('{').append(min).append('}');
-          i = e;
-          break;
-        }
+        i = cutLeading(s, i + 4, out);
       } else {
         inClass = c == '[';
         out.append(c);
@@ -1313,6 +1280,35 @@ public final class Parser {
       }
     }
     return out.toString();
+  }
+
+  /**
+   * dropLeadingBehindQuantifiers on the lookbehind body at {@code i}: appends what it keeps of the
+   * leading atoms, returns where the copy resumes.
+   */
+  private static int cutLeading(String s, int i, StringBuilder out) {
+    while (true) {
+      int a = simpleAtomEnd(s, i);
+      if (a < 0 || a >= s.length()) return i;
+      char q = s.charAt(a);
+      int e = q == '{' ? quantifierEnd(s, a) : "*?+".indexOf(q) >= 0 ? a + 1 : -1;
+      if (e < 0) return i;
+      int d = q == '{' ? digitsEnd(s, a + 1) : a;
+      String min = q == '{' ? s.substring(a + 1, d) : q == '+' ? "1" : "0";
+      java.math.BigInteger lo = new java.math.BigInteger(min);
+      if (s.charAt(d) == ','
+          && d + 2 < e
+          && lo.compareTo(new java.math.BigInteger(s.substring(d + 1, e - 1))) > 0) {
+        return i; // {n,m} with n > m is a SyntaxError: leave it
+      }
+      if (e < s.length() && s.charAt(e) == '?') e++; // lazy
+      if (lo.signum() > 0) {
+        out.append(s, i, a);
+        if (!lo.equals(java.math.BigInteger.ONE)) out.append('{').append(min).append('}');
+        return e;
+      }
+      i = e; // optional: drop atom and quantifier, look at what follows
+    }
   }
 
   /**
@@ -1326,9 +1322,7 @@ public final class Parser {
       if (i + 1 >= n) return -1;
       char x = s.charAt(i + 1);
       if (x >= '0' && x <= '9' || "bBkc".indexOf(x) >= 0) return -1;
-      int len = x == 'x' ? 4 : x == 'u' ? 6 : 2;
-      if (len > 2 && (i + len > n || !s.substring(i + 2, i + len).matches("[0-9a-fA-F]+"))) len = 2;
-      return i + len;
+      return i + (x == 'u' && hexRun(s, i + 2, 4) ? 6 : x == 'x' && hexRun(s, i + 2, 2) ? 4 : 2);
     }
     if (c == '[') {
       for (int j = i + 1; j < n; j++) {
@@ -1338,7 +1332,7 @@ public final class Parser {
       }
       return -1;
     }
-    return "^$.*+?()]{}|/".indexOf(c) >= 0 && c != '.' ? -1 : i + 1;
+    return "^$*+?()]{}|/".indexOf(c) >= 0 ? -1 : i + 1;
   }
 
   /** The index just past a {@code {n}}, {@code {n,}} or {@code {n,m}} at {@code i}, else -1. */
