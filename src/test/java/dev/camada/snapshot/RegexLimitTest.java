@@ -175,4 +175,66 @@ class RegexLimitTest {
     // the budget is per request: the next request starts fresh
     assertEquals("cr_tail", build(alone).match(mi).rule());
   }
+
+  /**
+   * camada-all-zpbv: a stored `matches` value that is '' or not a string never matches, over the
+   * cap or not.
+   */
+  @TestFactory
+  Stream<DynamicTest> aNonStringMatchesValueNeverMatches() {
+    List<Object> vals = new ArrayList<>();
+    vals.add(123);
+    vals.add(0);
+    vals.add(true);
+    vals.add(null);
+    vals.add(Map.of("x", 1));
+    vals.add(List.of("^/a"));
+    vals.add(List.of(123));
+    vals.add("");
+    String str = "123 0 null true {x=1} [^/a] {\"x\":1} [123]"; // every coerced spelling
+    String big = "a".repeat(Parser.MAX_MATCH_INPUT + 1);
+    List<DynamicTest> out = new ArrayList<>();
+    for (Object v : vals) {
+      for (String f : List.of("ua", "path", "header")) {
+        for (boolean over : List.of(false, true)) {
+          out.add(
+              DynamicTest.dynamicTest(
+                  Json.stringify(v) + " on " + f + (over ? " over the cap" : ""),
+                  () -> {
+                    MatchInput in =
+                        new MatchInput(
+                            "8.8.8.8",
+                            null,
+                            null,
+                            null,
+                            over && f.equals("path") ? "/a/" + str + "/" + big : "/a/" + str,
+                            over && f.equals("ua") ? str + " " + big : str,
+                            n -> over && f.equals("header") ? str + " " + big : str);
+                    Map<String, Object> cond = new HashMap<>();
+                    cond.put("f", f);
+                    cond.put("op", "matches");
+                    cond.put("v", v);
+                    if (f.equals("header")) {
+                      cond.put("name", "x-h");
+                    }
+                    Map<String, Object> blk =
+                        Map.of(
+                            "id",
+                            "cr_blk",
+                            "action",
+                            "block",
+                            "conds",
+                            List.of(Map.of("f", "ip", "op", "is_not", "v", "1.1.1.1")));
+                    Map<String, Object> b =
+                        Map.of("id", "cr_b", "action", "block", "conds", List.of(cond));
+                    Map<String, Object> sk =
+                        Map.of("id", "cr_s", "action", "skip", "conds", List.of(cond));
+                    assertFalse(build(List.of(b)).match(in).block());
+                    assertEquals("cr_blk", build(List.of(sk, blk)).match(in).rule());
+                  }));
+        }
+      }
+    }
+    return out.stream();
+  }
 }
