@@ -10,7 +10,7 @@ import java.nio.IntBuffer;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.regex.Pattern;
+import java.util.function.Predicate;
 
 /**
  * Matcher: sub-millisecond checks over a parsed Snapshot, ported from {@code @camada/core}
@@ -106,12 +106,12 @@ public final class Matcher {
 
   /** Exact, prefix (canonical keys) or regex membership of one path form. */
   private static boolean pathIn(
-      Set<String> exact, Set<String> prefix, List<Pattern> regex, String p) {
+      Set<String> exact, Set<String> prefix, List<Predicate<String>> regex, String p) {
     if (exact.contains(p) || (!prefix.isEmpty() && Paths.prefixed(prefix, p))) {
       return true;
     }
-    for (Pattern rx : regex) {
-      if (Parser.find(rx, p)) {
+    for (Predicate<String> pred : regex) {
+      if (pred.test(p)) {
         return true;
       }
     }
@@ -285,18 +285,18 @@ public final class Matcher {
       }
     }
     String[] forms = Paths.forms(i.path()); // [raw, lit, full]: contracts §D3 "Path matching"
-    if (!s.rules().isEmpty()) {
-      RuleRequest r = new RuleRequest();
-      r.n4 = n4;
-      r.ip6 = w;
-      r.asn = i.asn();
-      r.country = i.country();
-      r.tlsx = i.tlsx();
-      r.paths = forms;
-      r.ua = i.ua();
-      r.header = i.header();
-      Parser.openRequestBudget();
-      try {
+    Parser.openRequestBudget(); // one budget covers the rule walk and the three sides
+    try {
+      if (!s.rules().isEmpty()) {
+        RuleRequest r = new RuleRequest();
+        r.n4 = n4;
+        r.ip6 = w;
+        r.asn = i.asn();
+        r.country = i.country();
+        r.tlsx = i.tlsx();
+        r.paths = forms;
+        r.ua = i.ua();
+        r.header = i.header();
         for (CompiledRule rule : s.rules()) { // the order IS the precedence (§A4): first match wins
           boolean all = true;
           for (RuleCond cond : rule.conds()) {
@@ -309,23 +309,23 @@ public final class Matcher {
             return ruleResult(rule, s.version());
           }
         }
-      } finally {
-        Parser.closeRequestBudget();
       }
+      // an exemption: every canonical spelling must agree
+      String reason = side(s.allow(), i, n4, w, forms, false);
+      if (reason != null) {
+        return MatchResult.of(false, false, true, reason, s.version());
+      }
+      reason = blockSide(i, n4, w, forms);
+      if (reason != null) {
+        return MatchResult.of(true, false, false, reason, s.version());
+      }
+      reason = side(s.challenge(), i, n4, w, forms, true);
+      if (reason != null) {
+        return MatchResult.of(false, true, false, reason, s.version());
+      }
+      return MatchResult.of(false, false, false, null, s.version());
+    } finally {
+      Parser.closeRequestBudget();
     }
-    // an exemption: every canonical spelling must agree
-    String reason = side(s.allow(), i, n4, w, forms, false);
-    if (reason != null) {
-      return MatchResult.of(false, false, true, reason, s.version());
-    }
-    reason = blockSide(i, n4, w, forms);
-    if (reason != null) {
-      return MatchResult.of(true, false, false, reason, s.version());
-    }
-    reason = side(s.challenge(), i, n4, w, forms, true);
-    if (reason != null) {
-      return MatchResult.of(false, true, false, reason, s.version());
-    }
-    return MatchResult.of(false, false, false, null, s.version());
   }
 }
