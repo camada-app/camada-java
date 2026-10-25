@@ -748,7 +748,7 @@ public final class Parser {
         }
         continue;
       } else if ((ch == '*' || ch == '+') && cur.behind) {
-        out.append(ch == '*' ? "{0," : "{1,").append(LOOKBEHIND_MAX).append('}');
+        out.append(capBehind(ch == '*' ? "{0,}" : "{1,}"));
         i++;
         continue;
       } else if (ch == '$') {
@@ -1201,13 +1201,9 @@ public final class Parser {
    * A quantifier inside a lookbehind with its upper bound capped at LOOKBEHIND_MAX (see jsToJava).
    */
   private static String capBehind(String q) {
-    String[] b = q.substring(1, q.length() - 1).split(",", -1);
-    if (b.length == 1) {
-      return q; // {n}
-    }
-    long lo = Long.parseLong(b[0]);
-    if (b[1].isEmpty() || Long.parseLong(b[1]) > LOOKBEHIND_MAX) {
-      return "{" + lo + "," + Math.max(lo, LOOKBEHIND_MAX) + "}";
+    String[] b = q.substring(1, q.length() - 1).split(",", -1); // clamped: each fits a long
+    if (b.length == 2 && (b[1].isEmpty() || Long.parseLong(b[1]) > LOOKBEHIND_MAX)) {
+      return "{" + b[0] + "," + Math.max(Long.parseLong(b[0]), LOOKBEHIND_MAX) + "}";
     }
     return q;
   }
