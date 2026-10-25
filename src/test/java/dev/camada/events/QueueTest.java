@@ -191,9 +191,11 @@ class QueueTest {
   void aWaitingFlushDrainsBehindTheOneInFlight() throws InterruptedException {
     FakeAnalyst a = new FakeAnalyst();
     CountDownLatch gate = new CountDownLatch(1);
+    CountDownLatch entered = new CountDownLatch(1);
     Queue q = queue(a).maxBatch(1).flushS(60);
     q.transport(
         req -> {
+          entered.countDown();
           try {
             gate.await(
                 2, TimeUnit.SECONDS); // the periodic flush is mid-POST when the exit drain starts
@@ -203,9 +205,9 @@ class QueueTest {
           return a.send(req);
         });
     q.push(ev("i", 1L));
-    for (int k = 0; k < 100 && !q.inFlight(); k++) {
-      sleep(5);
-    }
+    // inFlight() flips before the batch is cut, so wait for the transport itself: item 1 is then
+    // certainly in the batch being posted and item 2 can only queue behind it.
+    assertTrue(entered.await(5, TimeUnit.SECONDS));
     assertTrue(q.inFlight());
     q.push(ev("i", 2L));
     q.flush(); // the request-path flush yields to the one in flight
