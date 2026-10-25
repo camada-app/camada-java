@@ -327,6 +327,29 @@ class ParseTest {
     js("^.{2}$", "\u0085x", true);
     js("^a.*?b$", "a\u0085b", true);
     js("(?<=.)b", "\u0085b", true);
+    // unbounded quantifiers in a lookbehind are bounded (JDK 17 overflows its length count)
+    js("(?<=ab+)c", "abc", true);
+    js("(?<=ab+)", "ab", true);
+    js("(?<!b[ab]*)$", "b", false);
+    js("(?<=b[ab]*)$", "b", true);
+    js("(?<=(a)*b)", "ab", true);
+    js("(?<=ba+)b", "ababc", true);
+    js("(?<=a[ab]*(a))b", "aab", true);
+    js("(?<=a+?)b", "aab", true);
+    js("(?<=ab{2,})c", "abbc", true);
+    js("(?<=ab{2,})c", "abc", false);
+    js("(?<=ab{1,99999999999})c", "abc", true);
+    // past MAX_MATCH_INPUT, so straight through the matcher: Parser.find's 50 ms budget is not
+    // under test
+    assertTrue(
+        Parser.compileRegex("(?<=a.*)z").matcher("a" + "x".repeat(3000) + "z").find(),
+        "long input");
+    js("(?:(?<=a))*b", "b", true);
+    assertEquals("(?<=ab{1,65535})c", Parser.jsToJava("(?<=ab+)c"));
+    assertEquals(
+        "(?<=a{0,65535}?b{2,65535}c{3}d{1,9})", Parser.jsToJava("(?<=a*?b{2,}c{3}d{1,9})"));
+    assertEquals("(?:(?<=a))*b[a*]+", Parser.jsToJava("(?:(?<=a))*b[a*]+"));
+    assertNull(Parser.compileRegex("(?<=(?:ab+)+)c")); // Java 17 rejects it: fail open
     js("^(?s:.)$", "\n", true);
     js("^(?s:.)$", "\u0085", true);
     js("^(?s:a(?-s:.))$", "a\n", false);
