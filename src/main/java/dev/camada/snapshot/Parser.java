@@ -514,17 +514,19 @@ public final class Parser {
    * IllegalArgumentException and compileRegex returns null, logged once. One to a group on its left
    * in the same lookbehind reads as unset in JS too, and compiles to {@code (?:)}.
    *
-   * <p>Residuals, where Java cannot unset a capture: (A) a group inside a loop that an earlier
-   * iteration set and this one skipped, read in the {@code (?:...)} alternation form: {@code
-   * ^(?:(a)?b\1)+$} on "abab" is true in JS and false here; {@code ^(?:(a)|c)*\1b$} on "acab" is
-   * false in JS and true here. (B) a capture leaking out of a positive lookaround: {@code
-   * ^(?:(?=(a))ab|a)\1b$} on "ab" is true in JS and false here. (C) the lookbehind back-references
-   * to a later group, which fail open (see above). (D) Java's loops ({@code *}, {@code +}, {@code
-   * {n,m}}) do not restore captures when they backtrack out of an iteration or move to the next
-   * find() start, so a MAYBE or SET reference to a group under such a loop may read a stale value:
-   * {@code ^(b)*\1b$} on "b" is true in JS and false here (the old build was false too; the marker
-   * form never matches less than the old {@code (?:\N)}). Nothing the backend accepts since
-   * camada-all-xuxq carries a back-reference, so reopen this if that screen is relaxed.
+   * <p>Residuals, where Java cannot unset a capture. Each throws IllegalArgumentException when the
+   * read is maybe-unset, so compileRegex returns null, logged once (fail open), like (C). (A) a
+   * group inside a loop that an earlier iteration set and this one skipped, read in the {@code
+   * (?:...)} alternation form: {@code ^(?:(a)?b\1)+$} on "abab" is true in JS and false here;
+   * {@code ^(?:(a)|c)*\1b$} on "acab" is false in JS and true here. (B) a capture set inside a
+   * lookaround (Java does not restore it after the lookaround returns): {@code
+   * ^(?:(?=(a))ab|a)\1b$} on "ab" is true in JS and false here; {@code (?=(?:(a)|b)\1c)bc} on
+   * "aacbc" is true in JS and false here; {@code (?!(?:(a)|b)\1c)b} on "aacbc" is false in JS and
+   * true here. (C) the lookbehind back-references to a later group (see above). (D) Java's loops
+   * ({@code *}, {@code +}, {@code {n,m}}) do not restore captures when they backtrack out of an
+   * iteration or move to the next find() start, so a maybe-unset reference to a group under such a
+   * loop may read a stale value: {@code ^(b)*\1b$} on "b" is true in JS and false here. SET reads
+   * under a loop still compile.
    */
   static String jsToJava(String pattern) {
     return jsToJava(pattern, false);
@@ -841,6 +843,7 @@ public final class Parser {
     final boolean multiline; // inside an (?m: group, where ^ and $ also match at line breaks
     int alts = 1;
     boolean minZero; // a quantifier after its ) allows zero repeats
+    boolean loop; // a quantifier after its ) can repeat it: *, + or a brace quantifier
     boolean marked; // read as maybe-unset: wrapped with an empty marker group after it
     int jn; // Java group number of the capture in the output
     int mn; // Java group number of its marker, if marked
@@ -952,6 +955,7 @@ public final class Parser {
         }
       } else if (ch == ')' && top.parent != null) {
         top.minZero = minZero(p, i + 1);
+        top.loop = loop(p, i + 1);
         if (top.cap > 0) {
           events.add(top);
         }
@@ -1062,7 +1066,25 @@ public final class Parser {
     if (before == behind) { // behind and before: JS has not evaluated cap yet
       return Read.UNSET;
     }
-    return certain ? Read.SET : Read.MAYBE;
+    if (certain) {
+      return Read.SET;
+    }
+    for (Group g = cap; g != null; g = g.parent) {
+      if (g.loop || g.lookaround()) {
+        throw new IllegalArgumentException(
+            "back-reference Java may read stale: a maybe-unset group under a loop or a lookaround");
+      }
+    }
+    return Read.MAYBE;
+  }
+
+  /** Whether the quantifier at {@code at} can repeat: {@code *}, {@code +}, {@code {n..}}. */
+  private static boolean loop(String p, int at) {
+    if (at >= p.length()) {
+      return false;
+    }
+    char q = p.charAt(at);
+    return q == '*' || q == '+' || (q == '{' && quantifierEnd(p, at) > 0);
   }
 
   /**
