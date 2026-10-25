@@ -598,8 +598,10 @@ public final class Parser {
    * K = {@link #LOOKBEHIND_MAX}. Java 17 still rejects a loop over a group whose length varies (an
    * alternation, a capture of varying length, or a nested variable quantifier), as in {@code
    * (?<=(a|b)+)c} and {@code (?<=(?:ab+)+)c}, so compileRegex returns null, logged (fail open).
-   * Java tries every start of the lookbehind at each position, so a find costs about n^(k+1) steps
-   * for k unbounded quantifiers in one lookbehind on n chars; on a long value that runs into {@link
+   * Java tries every start of a lookbehind at each position: with two or more unbounded quantifiers
+   * in one lookbehind a find takes seconds on a 2 KB value, so compileRegex returns null, logged
+   * (fail open). One still compiles; it costs about n^2 steps when the lookbehind matches, but one
+   * that fails after the quantifier ({@code (?<=a+b)c} on a run of a) can still exceed {@link
    * #find}'s budget, which answers the rule's onFailure.
    *
    * <p>(F) accepted, letters a tenant rule is unlikely to name: /i folds differ from node 24 in two
@@ -755,12 +757,12 @@ public final class Parser {
           i++;
         } else {
           String q = clampBounds(pattern.substring(i, end));
-          out.append(cur.behind ? capBehind(q) : q);
+          out.append(cur.behind ? capBehind(q, cur) : q);
           i = end;
         }
         continue;
       } else if ((ch == '*' || ch == '+') && cur.behind) {
-        out.append(capBehind(ch == '*' ? "{0,}" : "{1,}"));
+        out.append(capBehind(ch == '*' ? "{0,}" : "{1,}", cur));
         i++;
         continue;
       } else if (ch == '$') {
@@ -948,6 +950,7 @@ public final class Parser {
     final boolean dotAll; // inside an (?s: group, where . already matches everything
     final boolean multiline; // inside an (?m: group, where ^ and $ also match at line breaks
     final boolean behind; // inside a lookbehind, where Java needs every quantifier bounded
+    int capped; // on an outermost lookbehind: quantifiers capBehind capped in it
     int alts = 1;
     boolean minZero; // a quantifier after its ) allows zero repeats
     boolean loop; // a quantifier after its ) can repeat it: *, + or a brace quantifier
@@ -1210,17 +1213,22 @@ public final class Parser {
   }
 
   /**
-   * A quantifier inside a lookbehind with its upper bound capped at LOOKBEHIND_MAX (see jsToJava).
+   * A quantifier inside lookbehind group {@code g} with its upper bound capped at LOOKBEHIND_MAX
+   * (see jsToJava). A second capped one in the same outermost lookbehind throws: too slow on Java.
    */
-  private static String capBehind(String q) {
+  private static String capBehind(String q, Group g) {
     String[] b = q.substring(1, q.length() - 1).split(",", -1); // clamped: each fits a long
     if (b.length != 2) return q;
     long lo = Long.parseLong(b[0]);
     long hi = b[1].isEmpty() ? Long.MAX_VALUE : Long.parseLong(b[1]);
     // lo > hi is a JS SyntaxError: leave it so Java rejects it too
-    return lo <= hi && hi > LOOKBEHIND_MAX
-        ? "{" + b[0] + "," + Math.max(lo, LOOKBEHIND_MAX) + "}"
-        : q;
+    if (lo > hi || hi <= LOOKBEHIND_MAX) return q;
+    while (g.parent.behind) g = g.parent;
+    if (++g.capped >= 2) {
+      throw new IllegalArgumentException(
+          "two or more unbounded quantifiers in one lookbehind (too slow on Java)");
+    }
+    return "{" + b[0] + "," + Math.max(lo, LOOKBEHIND_MAX) + "}";
   }
 
   /**
