@@ -1400,6 +1400,12 @@ public final class Parser {
   private static RuleCond compileCond(Map<String, Object> c, List<Pair> sets, boolean deny) {
     String f = String.valueOf(c.getOrDefault("f", ""));
     String op = String.valueOf(c.getOrDefault("op", ""));
+    // camada-all-zpbv: a matches value that is not a non-empty string never matches (it would
+    // otherwise be coerced to a regex, '' matching everything); first, so it beats the over-cap
+    // path.
+    if (op.equals("matches") && !(c.get("v") instanceof String sv && !sv.isEmpty())) {
+      return r -> false;
+    }
     if (f.equals("path")) { // every path op reads the canonical forms (see Paths), never fieldValue
       Predicate<String> pred = pathPred(op, values(c.get("v")), deny);
       return r -> Paths.hit(pred, r.paths, deny);
