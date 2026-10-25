@@ -222,9 +222,8 @@ public final class Parser {
   /** Longest ua/header/path value a {@code matches} regex reads, in UTF-16 code units. */
   public static final int MAX_MATCH_INPUT = 2048;
 
-  // Java reads a bounded lookbehind as JS for any input up to this many code points; a rule reads
-  // at
-  // most MAX_MATCH_INPUT and request lines longer than this are refused upstream.
+  // Java reads a bounded lookbehind as JS on any input up to this many code points: a rule reads
+  // at most MAX_MATCH_INPUT, and servers refuse request lines this long
   private static final int LOOKBEHIND_MAX = 65535;
 
   /**
