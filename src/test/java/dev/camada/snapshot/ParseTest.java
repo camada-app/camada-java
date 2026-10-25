@@ -350,6 +350,8 @@ class ParseTest {
         "(?<=a{0,65535}?b{2,65535}c{3}d{1,9})", Parser.jsToJava("(?<=a*?b{2,}c{3}d{1,9})"));
     assertEquals("(?:(?<=a))*b[a*]+", Parser.jsToJava("(?:(?<=a))*b[a*]+"));
     assertNull(Parser.compileRegex("(?<=(?:ab+)+)c")); // Java 17 rejects it: fail open
+    assertNull(Parser.compileRegex("(?<=(a|b)+)c"));
+    assertNull(Parser.compileRegex("(?<=a{99999,70000})b")); // JS SyntaxError
     js("^(?s:.)$", "\n", true);
     js("^(?s:.)$", "\u0085", true);
     js("^(?s:a(?-s:.))$", "a\n", false);
