@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.function.Predicate;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -40,49 +41,30 @@ class PathsTest {
   @Test
   void hitTriesARepeatedFormOnce() {
     int[] n = {0};
+    Predicate<String> no = p -> ++n[0] < 0;
+    Predicate<String> yes = p -> ++n[0] > 0;
     String[] same = Paths.forms("/a/b");
-    assertFalse(
-        Paths.hit(
-            p -> {
-              n[0]++;
-              return false;
-            },
-            same,
-            true));
-    assertEquals(1, n[0]);
-    n[0] = 0;
-    assertTrue(
-        Paths.hit(
-            p -> {
-              n[0]++;
-              return true;
-            },
-            same,
-            false));
-    assertEquals(1, n[0]);
-    n[0] = 0;
-    assertFalse(
-        Paths.hit(
-            p -> {
-              n[0]++;
-              return false;
-            },
-            same,
-            false));
-    assertEquals(1, n[0]);
-    n[0] = 0;
     String[] three = {"/a", "/b", "/c"};
-    assertFalse(
-        Paths.hit(
-            p -> {
-              n[0]++;
-              return false;
-            },
-            three,
-            true));
+    String[] repeat = {"/a", "/b", "/b"};
+    assertFalse(Paths.hit(no, same, true));
+    assertEquals(1, n[0]);
+    n[0] = 0;
+    assertTrue(Paths.hit(yes, same, false));
+    assertEquals(1, n[0]);
+    n[0] = 0;
+    assertFalse(Paths.hit(no, same, false));
+    assertEquals(1, n[0]);
+    n[0] = 0;
+    assertFalse(Paths.hit(no, three, true));
     assertEquals(3, n[0]);
+    n[0] = 0;
+    assertFalse(Paths.hit(no, repeat, true));
+    assertEquals(2, n[0]);
+    n[0] = 0;
+    assertFalse(Paths.hit(no, three, false));
+    assertEquals(1, n[0]);
     assertTrue(Paths.hit(p -> p.equals("/c"), three, true));
-    assertTrue(Paths.hit(p -> p.equals("/b"), new String[] {"/a", "/b", "/b"}, true));
+    assertTrue(Paths.hit(p -> p.equals("/b"), repeat, true));
     assertFalse(Paths.hit(p -> p.equals("/b"), three, false));
     assertTrue(Paths.hit(p -> !p.equals("/a"), three, false));
   }
