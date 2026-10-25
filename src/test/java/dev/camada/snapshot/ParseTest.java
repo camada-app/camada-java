@@ -346,8 +346,23 @@ class ParseTest {
         "long input");
     js("(?:(?<=a))*b", "b", true);
     assertEquals("(?<=ab{1,65535})c", Parser.jsToJava("(?<=ab+)c"));
-    assertEquals(
-        "(?<=a{0,65535}?b{2,65535}c{3}d{1,9})", Parser.jsToJava("(?<=a*?b{2,}c{3}d{1,9})"));
+    assertEquals("(?<=a{0,65535}?c{3}d{1,9})", Parser.jsToJava("(?<=a*?c{3}d{1,9})"));
+    // two or more capped quantifiers in one lookbehind: Java's find is n^(k+1), so fail open
+    assertThrows(IllegalArgumentException.class, () -> Parser.jsToJava("(?<=a*?b{2,})"));
+    assertNull(Parser.compileRegex("(?<=\\w+=\\w+)&"));
+    assertNull(Parser.compileRegex("(?<=a+b+)c"));
+    assertNull(Parser.compileRegex("(?<=a(?:b*)c{1,})d"));
+    assertNull(Parser.compileRegex("(?<=x(?<=a+)b+)c"));
+    js("(?<=a+)b(?<=b+)c", "aabbc", false); // the b before c has no a before it
+    js("(?<=a+)b(?<=b+)c", "abc", true);
+    js("(?<=a{1,9}b+)c", "abc", true);
+    js("(?<=a{1,9}b{2,1000})c", "abbc", true);
+    // 2047 chars through a rule must not hang: the pattern is dropped, so the rule cannot block
+    String v = "a".repeat(1023) + "=" + "a".repeat(1023);
+    Matcher lb = rulesSnapshot("[" + rule("lb", "block", "ua", null, "(?<=\\w+=\\w+)&") + "]");
+    long t0 = System.nanoTime();
+    assertFalse(lb.match(MatchInput.ip(null).withUa(v + "&")).block());
+    assertTrue(System.nanoTime() - t0 < 50_000_000L, "returns at once");
     assertEquals("(?:(?<=a))*b[a*]+", Parser.jsToJava("(?:(?<=a))*b[a*]+"));
     assertNull(Parser.compileRegex("(?<=(?:ab+)+)c")); // Java 17 rejects it: fail open
     assertNull(Parser.compileRegex("(?<=(a|b)+)c"));
