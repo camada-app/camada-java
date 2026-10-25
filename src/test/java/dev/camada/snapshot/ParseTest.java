@@ -554,6 +554,12 @@ class ParseTest {
     js("^(?:(a|b)c)+\\1$", "acbcb", true);
     js("^(?:(a|b)c)+\\1$", "acbca", false);
     js("^(?:(a)b\\1)+$", "abaaba", true);
+    // a maybe-unset read under a loop or out of a positive lookaround fails open (residuals A, B,
+    // D)
+    assertNull(Parser.compileRegex("^(?:(a)?b\\1)+$"));
+    assertNull(Parser.compileRegex("^(?:(a)|c)*\\1b$"));
+    assertNull(Parser.compileRegex("^(?:(?=(a))ab|a)\\1b$"));
+    assertNull(Parser.compileRegex("^(b)*\\1b$"));
     js("(?=(a+))\\1b", "aaab", true);
     js("(?<=(a))\\1b", "aab", true);
     js("(?<=(a))\\1b", "ab", false);
