@@ -842,6 +842,44 @@ class ParseTest {
   }
 
   @Test
+  void caseFoldsAsJsNonUnicodeI() {
+    js("^(?i:k)$", "\u212A", false);
+    jsi("^k$", "\u212A", false);
+    js("^(?i:s)$", "\u017F", false);
+    jsi("^s$", "\u017F", false);
+    js("^(?i:i)$", "\u0130", false);
+    jsi("^i$", "\u0130", false);
+    js("^(?i:\\u0131)$", "i", false);
+    jsi("^\\u0131$", "i", false);
+    js("^(?i:[a-z])$", "\u212A", false);
+    jsi("^[a-z]$", "\u212A", false);
+    js("^(?i:[^k])$", "\u212A", true);
+    jsi("^[^k]$", "\u212A", true);
+    jsi("^\u00E9$", "\u00C9", true);
+    js("^(?i:\u00E9)$", "\u00C9", true);
+    jsi("^\u212A$", "\u212A", true);
+    jsi("^\u212A$", "k", false);
+    jsi("^\u017F$", "S", false);
+    jsi("^\u00DF$", "\u1E9E", false);
+    jsi("^\u1E9E$", "\u00DF", false);
+    jsi("^\u2126$", "\u03C9", false);
+    jsi("^\u1F80$", "\u1F88", false);
+    js("^[\\u0100-\\u017F]$", "\u017F", true);
+    js("^[^\\u0100-\\u017F]$", "\u017F", false);
+    jsi("^[\\u0100-\\u017F]$", "s", false);
+    js("^[\\u2100-\\u2200]$", "\u212A", true);
+    js("^[\\u2000-\\uFFFF]$", "\u212A", true);
+    js("^\\W$", "\u212A", true);
+    jsi("^\\w$", "\u212A", false);
+    js("^.$", "\u017F", true);
+    js("^\\xDF$", "\u00DF", true);
+    js("^\\337$", "\u00DF", true);
+    js("^\\u017F$", "\u017F", true);
+    js("^\u017F+$", "\u017F\u017F", true);
+    js("(?<=\u212A)a", "\u212Aa", true);
+  }
+
+  @Test
   void anEngineFailureUnderTheCapFailsClosedForDenyAndMissForSkip() throws Exception {
     // java.util.regex recurses per iteration: a 2000-char value under the cap overflows a small
     // stack
