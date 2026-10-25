@@ -518,13 +518,15 @@ public final class Parser {
    * read is maybe-unset, so compileRegex returns null, logged once (fail open), like (C). (A) a
    * group inside a loop that an earlier iteration set and this one skipped, read in the {@code
    * (?:...)} alternation form: {@code ^(?:(a)?b\1)+$} on "abab" is true in JS and false here;
-   * {@code ^(?:(a)|c)*\1b$} on "acab" is false in JS and true here. (B) a capture leaking out of a
-   * positive lookaround: {@code ^(?:(?=(a))ab|a)\1b$} on "ab" is true in JS and false here. (C) the
-   * lookbehind back-references to a later group (see above). (D) Java's loops ({@code *}, {@code
-   * +}, {@code {n,m}}) do not restore captures when they backtrack out of an iteration or move to
-   * the next find() start, so a maybe-unset reference to a group under such a loop may read a stale
-   * value: {@code ^(b)*\1b$} on "b" is true in JS and false here. SET reads under a loop still
-   * compile.
+   * {@code ^(?:(a)|c)*\1b$} on "acab" is false in JS and true here. (B) a capture set inside a
+   * lookaround (Java does not restore it after the lookaround returns): {@code
+   * ^(?:(?=(a))ab|a)\1b$} on "ab" is true in JS and false here; {@code (?=(?:(a)|b)\1c)bc} on
+   * "aacbc" is true in JS and false here; {@code (?!(?:(a)|b)\1c)b} on "aacbc" is false in JS and
+   * true here. (C) the lookbehind back-references to a later group (see above). (D) Java's loops
+   * ({@code *}, {@code +}, {@code {n,m}}) do not restore captures when they backtrack out of an
+   * iteration or move to the next find() start, so a maybe-unset reference to a group under such a
+   * loop may read a stale value: {@code ^(b)*\1b$} on "b" is true in JS and false here. SET reads
+   * under a loop still compile.
    */
   static String jsToJava(String pattern) {
     return jsToJava(pattern, false);
@@ -1046,13 +1048,11 @@ public final class Parser {
       return Read.UNSET;
     }
     boolean certain = !cap.minZero;
-    boolean inLook = false; // a positive lookaround between cap and l
     for (Group g = cap.parent; g != l; g = g.parent) {
       if (g.negative()) {
         return Read.UNSET;
       }
       certain &= g.alts == 1 && !g.minZero;
-      inLook |= g.lookaround();
     }
     Group look = l;
     while (look != null && !look.lookaround()) {
@@ -1070,14 +1070,10 @@ public final class Parser {
       return Read.SET;
     }
     for (Group g = cap; g != null; g = g.parent) {
-      if (g.loop) {
+      if (g.loop || g.lookaround()) {
         throw new IllegalArgumentException(
-            "back-reference Java may read stale: a maybe-unset group under a loop");
+            "back-reference Java may read stale: a maybe-unset group under a loop or a lookaround");
       }
-    }
-    if (inLook) {
-      throw new IllegalArgumentException(
-          "back-reference Java may read stale: a maybe-unset group inside a positive lookaround");
     }
     return Read.MAYBE;
   }
