@@ -346,21 +346,53 @@ class ParseTest {
         "long input");
     js("(?:(?<=a))*b", "b", true);
     assertEquals("(?<=ab{1,65535})c", Parser.jsToJava("(?<=ab+)c"));
-    assertEquals("(?<=a{0,65535}?c{3}d{1,9})", Parser.jsToJava("(?<=a*?c{3}d{1,9})"));
+    assertEquals("(?<=xa{0,65535}?c{3}d{1,9})", Parser.jsToJava("(?<=xa*?c{3}d{1,9})"));
     // two or more capped quantifiers in one lookbehind: a find takes seconds, so fail open
-    assertThrows(IllegalArgumentException.class, () -> Parser.jsToJava("(?<=a*?b{2,})"));
-    assertNull(Parser.compileRegex("(?<=\\w+=\\w+)&"));
-    assertNull(Parser.compileRegex("(?<=a+b+)c"));
+    assertThrows(IllegalArgumentException.class, () -> Parser.jsToJava("(?<=xa*?b{2,})"));
+    assertNull(Parser.compileRegex("(?<=x\\w+=\\w+)&"));
+    assertNull(Parser.compileRegex("(?<=xa+b+)c"));
     assertNull(Parser.compileRegex("(?<=a(?:b*)c{1,})d"));
-    assertNull(Parser.compileRegex("(?<=x(?<=a+)b+)c"));
+    assertNull(Parser.compileRegex("(?<=x(?<=ya+)b+)c"));
+    // a lookbehind's leading quantifier is cut to its minimum (exact), so it does not count
+    js("(?<=\\w+=\\w+)&", "k=v&", true);
+    js("(?<=a+b+)c", "aabbc", true);
+    js("(?<=a+b+)c", "aac", false);
+    js("(?<=x(?<=a+)b+)c", "xabc", false);
+    js("(?<=x(?<=a+)b+)c", "xbbc", false);
+    js("(?<=a+b)c", "aabc", true);
+    js("(?<=a+b)c", "abd", false);
+    js("(?<!a+b)c", "xbc", true);
+    js("(?<!a+b)c", "aabc", false);
+    js("(?<=a*)b", "b", true);
+    js("(?<!a*)b", "b", false);
+    js("(?<=a{2,}b)c", "abc", false);
+    js("(?<=a{2,}b)c", "aabc", true);
+    // JS SyntaxError (nothing to repeat): still fails open
+    assertNull(Parser.compileRegex("(?<=a+*b)c"));
+    assertNull(Parser.compileRegex("(?<=a++b)c"));
+    assertNull(Parser.compileRegex("(?<=a+??b)c"));
+    assertEquals("(?<=ab)c", Parser.jsToJava("(?<=a+b)c"));
+    assertEquals("(?<=\\w=)&", Parser.jsToJava("(?<=\\w+=)&"));
+    assertEquals("(?<=x)b", Parser.jsToJava("(?<=a*x)b"));
+    assertEquals("(?<=c)d", Parser.jsToJava("(?<=a*?b*c)d"));
+    assertEquals("(?<!a{3}b)c", Parser.jsToJava("(?<!a{3,}b)c"));
+    assertEquals("(?<=[ab]c)d", Parser.jsToJava("(?<=[ab]+c)d"));
+    assertEquals("(?<=(a){1,65535}b)c", Parser.jsToJava("(?<=(a)+b)c")); // a group stays
+    assertEquals("\\(?<=a+b\\)", Parser.jsToJava("\\(?<=a+b\\)")); // escaped: no lookbehind
+    assertEquals("[(?<=a+]", Parser.jsToJava("[(?<=a+]")); // in a class
     js("(?<=a+)b(?<=b+)c", "aabbc", false); // the b before c has no a before it
     js("(?<=a+)b(?<=b+)c", "abc", true);
     js("(?<=a{1,9}b+)c", "abc", true);
     js("(?<=a{1,9}b{2,1000})c", "abbc", true);
-    // compiled, this ran past find's budget on a 2047-char value, so a deny rule failed closed
+    // exact now, so JS's answer (true) holds; before, a find ran past its budget and failed closed
     Matcher lb = rulesSnapshot("[" + rule("lb", "block", "ua", null, "(?<=\\w+=\\w+)&") + "]");
     String v = "a".repeat(1023) + "=" + "a".repeat(1023) + "&";
-    assertFalse(lb.match(MatchInput.ip(null).withUa(v)).block());
+    assertTrue(lb.match(MatchInput.ip(null).withUa(v)).block());
+    // ticket shapes: each failed closed on a 2047-char run of a (find's budget), now false as in JS
+    for (String rx : new String[] {"(?<=a+b)c", "(?<=\\w+=)&", "(?<=a*x)b"}) {
+      Matcher t = rulesSnapshot("[" + rule("t", "block", "ua", null, rx) + "]");
+      assertFalse(t.match(MatchInput.ip(null).withUa("a".repeat(2047))).block(), rx);
+    }
     assertEquals("(?:(?<=a))*b[a*]+", Parser.jsToJava("(?:(?<=a))*b[a*]+"));
     assertNull(Parser.compileRegex("(?<=(?:ab+)+)c")); // Java 17 rejects it: fail open
     assertNull(Parser.compileRegex("(?<=(a|b)+)c"));
