@@ -687,6 +687,62 @@ class ParseTest {
     assertEquals("(?:(?<=\\w)(?!\\w)|(?<!\\w)(?=\\w))", Parser.jsToJava("\\b"));
   }
 
+  @Test
+  void ruleWordBoundaryRunsNativeWhereExact() {
+    // camada-all-gxcp: JDK 19+'s \b counts a non-spacing mark after a letter as a word char
+    String[][] vec = {
+      {"a\\b", "a\u00E9", "true"},
+      {"\\b\u00E9", "\u00E9", "false"},
+      {"\\bselect\\b", "select\u0301", "true"},
+      {"\u00E9\\b\u0301", "\u00E9\u0301", "false"},
+      {"\\B\u0301", "t\u0301", "false"},
+      {"t\\b", "t\u0301", "true"},
+      {"\\bx", "\u0301x", "true"},
+      {"a\\b", "a\uD834\uDD67", "true"},
+      {"a\\B", "a\uD834\uDD67", "false"},
+    };
+    for (String[] v : vec) {
+      boolean want = Boolean.parseBoolean(v[2]);
+      String msg = v[0] + " on " + v[1];
+      assertEquals(want, Parser.compileRule(v[0], 0).find(v[1], false), msg);
+      assertEquals(want, Parser.find(Parser.compileRegex(v[0]), v[1]), msg);
+    }
+    Parser.Regex foo = Parser.compileRule("\\bfoo", 0);
+    assertEquals(Runtime.version().feature() >= 19, foo.bounds() != null);
+    if (foo.bounds() != null) {
+      assertTrue(foo.bounds().pattern().startsWith("\\bfoo"));
+    }
+    assertNull(Parser.compileRule("foo", 0).bounds());
+    assertNull(Parser.compileRule("[\\b]", 0).bounds());
+    List<String> inputs = new ArrayList<>(List.of("", "\uD83D\uDE00a", "a\uD83D\uDE00"));
+    String alphabet = "a_- \u00E9K\u017F";
+    List<String> prev = List.of("");
+    for (int len = 1; len <= 3; len++) {
+      List<String> next = new ArrayList<>();
+      for (String base : prev) {
+        for (char c : alphabet.toCharArray()) {
+          next.add(base + c);
+        }
+      }
+      inputs.addAll(next);
+      prev = next;
+    }
+    for (String p : new String[] {"a\\b", "\\b\u00E9", "\\B", "\\bfoo\\b", "x\\B.", "(?<=\\ba)b"}) {
+      for (int flags : new int[] {0, Pattern.CASE_INSENSITIVE}) {
+        Parser.Regex rx = Parser.compileRule(p, flags);
+        if (rx.bounds() == null) {
+          continue;
+        }
+        for (String in : inputs) {
+          assertEquals(
+              Parser.find(rx.exact(), in),
+              Parser.find(rx.bounds(), in),
+              p + " flags " + flags + " on " + in);
+        }
+      }
+    }
+  }
+
   private static String rule(String id, String action, String f, String name, String rx) {
     return "{\"id\":\""
         + id
