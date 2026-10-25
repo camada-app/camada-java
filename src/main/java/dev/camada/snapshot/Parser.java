@@ -600,9 +600,11 @@ public final class Parser {
    * (?<=(a|b)+)c} and {@code (?<=(?:ab+)+)c}, so compileRegex returns null, logged (fail open).
    * Java tries every start of a lookbehind at each position: with two or more unbounded quantifiers
    * in one lookbehind a find takes seconds on a 2 KB value, so compileRegex returns null, logged
-   * (fail open). One still compiles; it costs about n^2 steps when the lookbehind matches, but one
-   * that fails after the quantifier ({@code (?<=a+b)c} on a run of a) can still exceed {@link
-   * #find}'s budget, which answers the rule's onFailure.
+   * (fail open). One still compiles; it costs about n^2 steps when the lookbehind matches. A
+   * quantifier on a lookbehind's first simple atom is cut to its minimum (exact, since any start
+   * may be chosen), so it neither costs time nor counts toward that limit. A lookbehind whose
+   * quantifier is not first and fails after it, such as {@code (?<=x\w+=)&} on a run of x, can
+   * still exceed {@link #find}'s budget, which answers the rule's onFailure.
    *
    * <p>(F) accepted, letters a tenant rule is unlikely to name: /i folds differ from node 24 in two
    * ways. JDK 17 (Unicode 13) lacks the case pairs added in Unicode 14-16, so {@code /Ꟁ/i} on "ꟁ"
@@ -618,6 +620,7 @@ public final class Parser {
   }
 
   static String jsToJava(String pattern, boolean nativeBounds) {
+    pattern = dropLeadingBehindQuantifiers(pattern);
     String wb = nativeBounds ? "\\b" : WORD_BOUNDARY;
     String nwb = nativeBounds ? "\\B" : NON_WORD_BOUNDARY;
     StringBuilder out = new StringBuilder(pattern.length() + 8);
@@ -1247,6 +1250,95 @@ public final class Parser {
       sb.append(big ? String.valueOf(Integer.MAX_VALUE) : part);
     }
     return sb.toString();
+  }
+
+  /**
+   * Cuts the quantifier on a lookbehind's leading simple atom to its minimum: dropped with its atom
+   * at 0, else {@code {n}} (bare at 1). Exact, since the lookbehind may start anywhere.
+   */
+  private static String dropLeadingBehindQuantifiers(String s) {
+    int n = s.length();
+    StringBuilder out = new StringBuilder(n);
+    boolean inClass = false;
+    int i = 0;
+    while (i < n) {
+      char c = s.charAt(i);
+      if (c == '\\' && i + 1 < n) {
+        out.append(c).append(s.charAt(i + 1));
+        i += 2;
+      } else if (inClass) {
+        inClass = c != ']';
+        out.append(c);
+        i++;
+      } else if (s.startsWith("(?<=", i) || s.startsWith("(?<!", i)) {
+        out.append(s, i, i + 4);
+        i += 4;
+        while (true) {
+          int a = simpleAtomEnd(s, i);
+          if (a < 0 || a >= n) break;
+          char q = s.charAt(a);
+          int e;
+          String min;
+          if (q == '*' || q == '?') {
+            e = a + 1;
+            min = "0";
+          } else if (q == '+') {
+            e = a + 1;
+            min = "1";
+          } else if (q == '{' && (e = quantifierEnd(s, a)) > 0) {
+            min = s.substring(a + 1, digitsEnd(s, a + 1));
+            int comma = s.indexOf(',', a);
+            if (comma > 0 && comma < e - 2) { // {n,m}: n > m is a SyntaxError, leave it
+              String max = s.substring(comma + 1, e - 1);
+              if (new java.math.BigInteger(min).compareTo(new java.math.BigInteger(max)) > 0) break;
+            }
+          } else {
+            break;
+          }
+          if (e < n && s.charAt(e) == '?') e++; // lazy
+          String digits = min.replaceFirst("^0+(?=.)", "");
+          if (digits.equals("0")) {
+            i = e; // optional: drop atom and quantifier, look at what follows
+            continue;
+          }
+          out.append(s, i, a);
+          if (!digits.equals("1")) out.append('{').append(min).append('}');
+          i = e;
+          break;
+        }
+      } else {
+        inClass = c == '[';
+        out.append(c);
+        i++;
+      }
+    }
+    return out.toString();
+  }
+
+  /**
+   * The index just past the simple atom at {@code i} (see dropLeadingBehindQuantifiers), else -1.
+   */
+  private static int simpleAtomEnd(String s, int i) {
+    int n = s.length();
+    if (i >= n) return -1;
+    char c = s.charAt(i);
+    if (c == '\\') {
+      if (i + 1 >= n) return -1;
+      char x = s.charAt(i + 1);
+      if (x >= '0' && x <= '9' || "bBkc".indexOf(x) >= 0) return -1;
+      int len = x == 'x' ? 4 : x == 'u' ? 6 : 2;
+      if (len > 2 && (i + len > n || !s.substring(i + 2, i + len).matches("[0-9a-fA-F]+"))) len = 2;
+      return i + len;
+    }
+    if (c == '[') {
+      for (int j = i + 1; j < n; j++) {
+        char d = s.charAt(j);
+        if (d == '\\') j++;
+        else if (d == ']') return j + 1;
+      }
+      return -1;
+    }
+    return "^$.*+?()]{}|/".indexOf(c) >= 0 && c != '.' ? -1 : i + 1;
   }
 
   /** The index just past a {@code {n}}, {@code {n,}} or {@code {n,m}} at {@code i}, else -1. */
