@@ -294,7 +294,11 @@ public final class Parser {
       budget = Math.min(budget, left[0]);
     }
     try {
-      return rx.matcher(new Deadline(unitView(input), start + budget)).find();
+      String view = unitView(input);
+      if (ciBackRefOverStandIn(rx, view)) {
+        return onFailure;
+      }
+      return rx.matcher(new Deadline(view, start + budget)).find();
     } catch (StackOverflowError | RuntimeException e) { // incl. Deadline.RegexBudgetExceeded
       return onFailure;
     } finally {
@@ -302,6 +306,26 @@ public final class Parser {
         left[0] -= System.nanoTime() - start;
       }
     }
+  }
+
+  // JDK 17's /i back-reference (Pattern$CIBackRef) steps code points over a char length: a group
+  // holding a stand-in (two chars) misses or throws at match time. JDK 26 reads it right.
+  private static final boolean CI_BACKREF_BROKEN = Runtime.version().feature() < 26;
+  // an emitted numeric back-reference (not an escaped backslash before a digit)
+  private static final Pattern NUMERIC_BACKREF = Pattern.compile("(?<!\\\\)(?:\\\\\\\\)*\\\\[1-9]");
+  // an inline flag group that turns i on: (?i: (?si: (?i)
+  private static final Pattern INLINE_CI = Pattern.compile("\\(\\?[a-z]*i[a-z]*(?:-[a-z]+)?[:)]");
+
+  /**
+   * True where {@code rx} is case-insensitive with a back-reference and {@code view} holds a
+   * stand-in on a runtime that mis-reads that (residual E of {@link #jsToJava}): the caller fails
+   * open, as for any other read the runtime cannot do.
+   */
+  private static boolean ciBackRefOverStandIn(Pattern rx, String view) {
+    return CI_BACKREF_BROKEN
+        && ((rx.flags() & Pattern.CASE_INSENSITIVE) != 0 || INLINE_CI.matcher(rx.pattern()).find())
+        && NUMERIC_BACKREF.matcher(rx.pattern()).find()
+        && view.codePoints().anyMatch(Character::isSupplementaryCodePoint);
   }
 
   /**
@@ -561,7 +585,8 @@ public final class Parser {
    * stand-in (an astral char, or a {@link #STAND_IN} letter) steps code points over a length
    * counted in chars, so {@code /^(ſ)\1/i} on "ſſab" is false there, and {@code /^(ß)\1$/i} on "ßß"
    * throws StringIndexOutOfBoundsException, which find() reports as the rule's onFailure (all true
-   * in JS and on JDK 26).
+   * in JS and on JDK 26). {@link #find} answers {@code onFailure} for such input on JDK before 26
+   * instead, whether or not the group holds the stand-in.
    */
   static String jsToJava(String pattern) {
     return jsToJava(pattern, false);
