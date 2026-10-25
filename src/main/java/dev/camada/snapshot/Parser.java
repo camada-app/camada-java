@@ -600,9 +600,11 @@ public final class Parser {
    * (?<=(a|b)+)c} and {@code (?<=(?:ab+)+)c}, so compileRegex returns null, logged (fail open).
    * Java tries every start of a lookbehind at each position: with two or more unbounded quantifiers
    * in one lookbehind a find takes seconds on a 2 KB value, so compileRegex returns null, logged
-   * (fail open). One still compiles; it costs about n^2 steps when the lookbehind matches, but one
-   * that fails after the quantifier ({@code (?<=a+b)c} on a run of a) can still exceed {@link
-   * #find}'s budget, which answers the rule's onFailure.
+   * (fail open). One still compiles; it costs about n^2 steps when the lookbehind matches. A
+   * quantifier on a lookbehind's first simple atom is cut to its minimum (exact, since any start
+   * may be chosen), so it neither costs time nor counts toward that limit. A lookbehind whose
+   * quantifier is not first and fails after it, such as {@code (?<=x\w+=)&} on a run of x, can
+   * still exceed {@link #find}'s budget, which answers the rule's onFailure.
    *
    * <p>(F) accepted, letters a tenant rule is unlikely to name: /i folds differ from node 24 in two
    * ways. JDK 17 (Unicode 13) lacks the case pairs added in Unicode 14-16, so {@code /Ꟁ/i} on "ꟁ"
@@ -618,6 +620,7 @@ public final class Parser {
   }
 
   static String jsToJava(String pattern, boolean nativeBounds) {
+    pattern = dropLeadingBehindQuantifiers(pattern);
     String wb = nativeBounds ? "\\b" : WORD_BOUNDARY;
     String nwb = nativeBounds ? "\\B" : NON_WORD_BOUNDARY;
     StringBuilder out = new StringBuilder(pattern.length() + 8);
@@ -1247,6 +1250,93 @@ public final class Parser {
       sb.append(big ? String.valueOf(Integer.MAX_VALUE) : part);
     }
     return sb.toString();
+  }
+
+  /**
+   * Cuts the quantifier on a lookbehind's leading simple atom to its minimum: dropped with its atom
+   * at 0, else {@code {n}} (bare at 1). Exact, since the lookbehind may start anywhere.
+   */
+  private static String dropLeadingBehindQuantifiers(String s) {
+    int n = s.length();
+    StringBuilder out = new StringBuilder(n);
+    boolean inClass = false;
+    int i = 0;
+    while (i < n) {
+      char c = s.charAt(i);
+      if (c == '\\' && i + 1 < n) {
+        out.append(c).append(s.charAt(i + 1));
+        i += 2;
+      } else if (inClass) {
+        inClass = c != ']';
+        out.append(c);
+        i++;
+      } else if (s.startsWith("(?<=", i) || s.startsWith("(?<!", i)) {
+        out.append(s, i, i + 4);
+        i = cutLeading(s, i + 4, out);
+      } else {
+        inClass = c == '[';
+        out.append(c);
+        i++;
+      }
+    }
+    return out.toString();
+  }
+
+  /**
+   * dropLeadingBehindQuantifiers on the lookbehind body at {@code i}: appends what it keeps of the
+   * leading atoms, returns where the copy resumes.
+   */
+  private static int cutLeading(String s, int i, StringBuilder out) {
+    while (true) {
+      int a = simpleAtomEnd(s, i);
+      if (a < 0 || a >= s.length()) return i;
+      char q = s.charAt(a);
+      int e = q == '{' ? quantifierEnd(s, a) : "*?+".indexOf(q) >= 0 ? a + 1 : -1;
+      if (e < 0) return i;
+      int d = q == '{' ? digitsEnd(s, a + 1) : a;
+      String min = q == '{' ? s.substring(a + 1, d) : q == '+' ? "1" : "0";
+      java.math.BigInteger lo = new java.math.BigInteger(min);
+      if (s.charAt(d) == ','
+          && d + 2 < e
+          && lo.compareTo(new java.math.BigInteger(s.substring(d + 1, e - 1))) > 0) {
+        return i; // {n,m} with n > m is a SyntaxError: leave it
+      }
+      if (e < s.length() && s.charAt(e) == '?') e++; // lazy
+      if (e < s.length()
+          && ("*+?".indexOf(s.charAt(e)) >= 0 || s.charAt(e) == '{' && quantifierEnd(s, e) > 0)) {
+        return i; // a quantifier after the cut one is a SyntaxError: leave it
+      }
+      if (lo.signum() > 0) {
+        out.append(s, i, a);
+        if (!lo.equals(java.math.BigInteger.ONE)) out.append('{').append(min).append('}');
+        return e;
+      }
+      i = e; // optional: drop atom and quantifier, look at what follows
+    }
+  }
+
+  /**
+   * The index just past the simple atom at {@code i} (see dropLeadingBehindQuantifiers), else -1.
+   */
+  private static int simpleAtomEnd(String s, int i) {
+    int n = s.length();
+    if (i >= n) return -1;
+    char c = s.charAt(i);
+    if (c == '\\') {
+      if (i + 1 >= n) return -1;
+      char x = s.charAt(i + 1);
+      if (x >= '0' && x <= '9' || "bBkc".indexOf(x) >= 0) return -1;
+      return i + (x == 'u' && hexRun(s, i + 2, 4) ? 6 : x == 'x' && hexRun(s, i + 2, 2) ? 4 : 2);
+    }
+    if (c == '[') {
+      for (int j = i + 1; j < n; j++) {
+        char d = s.charAt(j);
+        if (d == '\\') j++;
+        else if (d == ']') return j + 1;
+      }
+      return -1;
+    }
+    return "^$*+?()]{}|/".indexOf(c) >= 0 ? -1 : i + 1;
   }
 
   /** The index just past a {@code {n}}, {@code {n,}} or {@code {n,m}} at {@code i}, else -1. */
