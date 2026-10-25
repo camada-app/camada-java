@@ -35,8 +35,9 @@ import java.util.regex.PatternSyntaxException;
  * one 15 per {@code ip} condition, in condition order (an empty half still ships its index word),
  * so a rule with two ip conditions reads two pairs. Meta travels separately: { version, country[],
  * tls[], pathsExact[], pathsPrefix[], pathsRegex[], allow?: side, challenge?: side, rules?: [] }
- * with side = { asn[], country[], pathsExact[], pathsPrefix[] }. The version byte is advisory:
- * sections 10-15 are read whenever they are present.
+ * with side = { asn[], country[], pathsExact[], pathsPrefix[] }. Each pathsRegex entry is a path
+ * {@code matches} condition (case-insensitive, deny on over-cap or failure, never matches if
+ * refused). The version byte is advisory: sections 10-15 are read whenever they are present.
  *
  * <p>A Uint32Array is an {@link IntBuffer} view over the little-endian bytes: zero-copy, read with
  * absolute gets only (so one parsed snapshot serves every thread), compared unsigned.
@@ -98,7 +99,7 @@ public final class Parser {
       Set<String> tls,
       Set<String> pathsExact,
       Set<String> pathsPrefix,
-      List<Pattern> pathsRegex,
+      List<Predicate<String>> pathsRegex,
       RangeSet allow,
       RangeSet challenge,
       List<CompiledRule> rules) {} // v5 only; empty on v3/v4, and the matcher then skips them
@@ -274,8 +275,8 @@ public final class Parser {
    * A pattern this runtime cannot run against this input answers {@code false} and never throws:
    * java.util.regex recurses per group iteration, so a nested quantifier against a long path or
    * user agent overflows the request thread's stack where JS and Python's engines would not. The
-   * legacy path list uses this; a v5 rule goes through {@link Regex#find}. Both end in {@link
-   * #find(Pattern, String, boolean)}.
+   * Public API, kept for callers; a v5 rule and the meta path list go through {@link Regex#find}.
+   * Both end in {@link #find(Pattern, String, boolean)}.
    */
   public static boolean find(Pattern rx, String input) {
     return find(rx, input, false);
@@ -1610,12 +1611,9 @@ public final class Parser {
       }
     }
     IntBuffer s6 = sec.getOrDefault(5, EMPTY);
-    List<Pattern> regex = new ArrayList<>();
+    List<Predicate<String>> regex = new ArrayList<>();
     for (String p : Config.strings(meta.get("pathsRegex"))) {
-      Pattern rx = compileRegex(p, Pattern.CASE_INSENSITIVE);
-      if (rx != null) {
-        regex.add(rx);
-      }
+      regex.add(pathPred("matches", List.of(p), true)); // a refused pattern is always false
     }
     return new Snapshot(
         String.valueOf(meta.getOrDefault("version", "")),
