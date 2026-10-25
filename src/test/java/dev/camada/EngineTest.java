@@ -1011,12 +1011,12 @@ class EngineTest {
     }
 
     @Test
-    void anEngineFailureFailsClosedForACustomRuleAndStaysOpenForTheLegacyList() {
+    void anEngineFailureFailsClosedForACustomRuleAndTheMetaList() {
       // Analyst-valid (no ReDoS by its own checker), but java.util.regex recurses once per
       // iteration, so a value under the cap overflows a small stack. A custom rule answers its
-      // deny flag when the engine fails (block -> 403); the legacy pathsRegex list is unchanged
-      // (a failure is a miss -> 200). The stack is forced small and the overflow is asserted, so
-      // the outcome does not depend on the platform's default stack.
+      // deny flag when the engine fails (block -> 403); so does the meta pathsRegex list, which
+      // runs as a path matches condition (a failure is a deny). The stack is forced small and the
+      // overflow is asserted, so the outcome does not depend on the platform's default stack.
       int stack = 64 * 1024;
       String ua = "a".repeat(2000) + "b";
       String uaRx = "^(?:a|b)*c";
@@ -1040,6 +1040,8 @@ class EngineTest {
                   "conds",
                   List.of(Map.of("f", "ua", "op", "matches", "v", uaRx)))));
       Host h = new Host();
+      // the path canonicalisation itself overflows on this stack before the meta list runs, so the
+      // envelope fails open (the meta list answering deny is pinned in ParseTest)
       assertEquals(200, onAStack(h, new Call("GET", longPath), stack).status());
       assertEquals(403, onAStack(h, new Call("GET", "/").header("user-agent", ua), stack).status());
       // the same patterns still decide what they can run
