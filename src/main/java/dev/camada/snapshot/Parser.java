@@ -595,9 +595,12 @@ public final class Parser {
    * <p>Inside a lookbehind an unbounded quantifier is bounded, because JDK 17 overflows its
    * lookbehind length count on one and then misses matches: {@code *} becomes {@code {0,K}}, {@code
    * +} becomes {@code {1,K}} and {@code {n,}} or a larger {@code {n,m}} becomes {@code {n,K}}, with
-   * K = {@link #LOOKBEHIND_MAX}. A loop over a group that itself holds a variable-length
-   * quantifier, as in {@code (?<=(?:ab+)+)c}, is still rejected by Java 17 ("obvious maximum
-   * length"), so compileRegex returns null, logged (fail open).
+   * K = {@link #LOOKBEHIND_MAX}. Java 17 still rejects a loop over a group whose length varies (an
+   * alternation, a capture of varying length, or a nested variable quantifier), as in {@code
+   * (?<=(a|b)+)c} and {@code (?<=(?:ab+)+)c}, so compileRegex returns null, logged (fail open).
+   * Java tries every start of the lookbehind at each position, so a find costs about n^(k+1) steps
+   * for k unbounded quantifiers in one lookbehind on n chars; on a long value that runs into {@link
+   * #find}'s budget, which answers the rule's onFailure.
    */
   static String jsToJava(String pattern) {
     return jsToJava(pattern, false);
@@ -1202,10 +1205,13 @@ public final class Parser {
    */
   private static String capBehind(String q) {
     String[] b = q.substring(1, q.length() - 1).split(",", -1); // clamped: each fits a long
-    if (b.length == 2 && (b[1].isEmpty() || Long.parseLong(b[1]) > LOOKBEHIND_MAX)) {
-      return "{" + b[0] + "," + Math.max(Long.parseLong(b[0]), LOOKBEHIND_MAX) + "}";
-    }
-    return q;
+    if (b.length != 2) return q;
+    long lo = Long.parseLong(b[0]);
+    long hi = b[1].isEmpty() ? Long.MAX_VALUE : Long.parseLong(b[1]);
+    // lo > hi is a JS SyntaxError: leave it so Java rejects it too
+    return lo <= hi && hi > LOOKBEHIND_MAX
+        ? "{" + b[0] + "," + Math.max(lo, LOOKBEHIND_MAX) + "}"
+        : q;
   }
 
   /**
