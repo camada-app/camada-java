@@ -650,6 +650,27 @@ class ParseTest {
   }
 
   @Test
+  void aClassRangeEndingInAClassEscapeReadsTheDashAsALiteral() {
+    // Annex B: [a-\\w] is {a, -, \\w}; node: /[a-\\w]/.test('-') true. Java rejects the bare range.
+    Pattern a = Parser.compileRegex("[a-\\w]");
+    assertNotNull(a);
+    assertTrue(a.matcher("-").find());
+    assertTrue(a.matcher("a").find());
+    assertFalse(a.matcher("!").find());
+    Pattern b = Parser.compileRegex("[\\uD800-\\w]");
+    assertNotNull(b);
+    assertTrue(b.matcher("x").find());
+    assertTrue(b.matcher("-").find());
+    assertFalse(b.matcher("!").find());
+    Pattern c = Parser.compileRegex("[\\w-a]"); // class escape first: also {\\w, -, a}
+    assertNotNull(c);
+    assertTrue(c.matcher("-").find());
+    assertNotNull(Parser.compileRegex("[a-\\d\\s]"));
+    assertTrue(Parser.compileRegex("[a-c]").matcher("b").find()); // a real range still ranges
+    assertFalse(Parser.compileRegex("[a-c]").matcher("-").find());
+  }
+
+  @Test
   void jsSpaceAndWordBoundaryReadAsJsReadsThem() {
     // camada-all-ooqj: Java's \s is ASCII-only and its \b counts non-ASCII letters as word chars
     js("union\\s+select", "union\u00A0select", true);
