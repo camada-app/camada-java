@@ -175,8 +175,12 @@ class ParseTest {
   @Test
   void metaPathsRegexOverTheCapAnswersBlock() {
     Matcher m = metaPaths("[\"^/never$\"]", "[]");
-    assertEquals("path", m.match(MatchInput.ip(null).withPath("/" + "a".repeat(2048))).reason());
-    assertFalse(m.match(MatchInput.ip(null).withPath("/" + "a".repeat(2047))).block());
+    assertEquals(
+        "path",
+        m.match(MatchInput.ip(null).withPath("/" + "a".repeat(Parser.MAX_MATCH_INPUT))).reason());
+    assertFalse(
+        m.match(MatchInput.ip(null).withPath("/" + "a".repeat(Parser.MAX_MATCH_INPUT - 1)))
+            .block());
   }
 
   @Test
