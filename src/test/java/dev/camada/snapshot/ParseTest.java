@@ -346,8 +346,21 @@ class ParseTest {
         "long input");
     js("(?:(?<=a))*b", "b", true);
     assertEquals("(?<=ab{1,65535})c", Parser.jsToJava("(?<=ab+)c"));
-    assertEquals(
-        "(?<=a{0,65535}?b{2,65535}c{3}d{1,9})", Parser.jsToJava("(?<=a*?b{2,}c{3}d{1,9})"));
+    assertEquals("(?<=a{0,65535}?c{3}d{1,9})", Parser.jsToJava("(?<=a*?c{3}d{1,9})"));
+    // two or more capped quantifiers in one lookbehind: a find takes seconds, so fail open
+    assertThrows(IllegalArgumentException.class, () -> Parser.jsToJava("(?<=a*?b{2,})"));
+    assertNull(Parser.compileRegex("(?<=\\w+=\\w+)&"));
+    assertNull(Parser.compileRegex("(?<=a+b+)c"));
+    assertNull(Parser.compileRegex("(?<=a(?:b*)c{1,})d"));
+    assertNull(Parser.compileRegex("(?<=x(?<=a+)b+)c"));
+    js("(?<=a+)b(?<=b+)c", "aabbc", false); // the b before c has no a before it
+    js("(?<=a+)b(?<=b+)c", "abc", true);
+    js("(?<=a{1,9}b+)c", "abc", true);
+    js("(?<=a{1,9}b{2,1000})c", "abbc", true);
+    // compiled, this ran past find's budget on a 2047-char value, so a deny rule failed closed
+    Matcher lb = rulesSnapshot("[" + rule("lb", "block", "ua", null, "(?<=\\w+=\\w+)&") + "]");
+    String v = "a".repeat(1023) + "=" + "a".repeat(1023) + "&";
+    assertFalse(lb.match(MatchInput.ip(null).withUa(v)).block());
     assertEquals("(?:(?<=a))*b[a*]+", Parser.jsToJava("(?:(?<=a))*b[a*]+"));
     assertNull(Parser.compileRegex("(?<=(?:ab+)+)c")); // Java 17 rejects it: fail open
     assertNull(Parser.compileRegex("(?<=(a|b)+)c"));
