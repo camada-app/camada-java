@@ -222,6 +222,10 @@ public final class Parser {
   /** Longest ua/header/path value a {@code matches} regex reads, in UTF-16 code units. */
   public static final int MAX_MATCH_INPUT = 2048;
 
+  // Java reads a bounded lookbehind as JS on any input up to this many code points: a rule reads
+  // at most MAX_MATCH_INPUT, and servers refuse request lines this long
+  private static final int LOOKBEHIND_MAX = 65535;
+
   /**
    * One value through a {@code matches} regex. Over the cap the regex never runs (never truncate):
    * a deny rule hits, a skip rule misses.
@@ -587,6 +591,16 @@ public final class Parser {
    * throws StringIndexOutOfBoundsException, which find() reports as the rule's onFailure (all true
    * in JS and on JDK 26). {@link #find} answers {@code onFailure} for such input on JDK before 26
    * instead, whether or not the group holds the stand-in.
+   *
+   * <p>Inside a lookbehind an unbounded quantifier is bounded, because JDK 17 overflows its
+   * lookbehind length count on one and then misses matches: {@code *} becomes {@code {0,K}}, {@code
+   * +} becomes {@code {1,K}} and {@code {n,}} or a larger {@code {n,m}} becomes {@code {n,K}}, with
+   * K = {@link #LOOKBEHIND_MAX}. Java 17 still rejects a loop over a group whose length varies (an
+   * alternation, a capture of varying length, or a nested variable quantifier), as in {@code
+   * (?<=(a|b)+)c} and {@code (?<=(?:ab+)+)c}, so compileRegex returns null, logged (fail open).
+   * Java tries every start of the lookbehind at each position, so a find costs about n^(k+1) steps
+   * for k unbounded quantifiers in one lookbehind on n chars; on a long value that runs into {@link
+   * #find}'s budget, which answers the rule's onFailure.
    */
   static String jsToJava(String pattern) {
     return jsToJava(pattern, false);
@@ -731,9 +745,14 @@ public final class Parser {
           out.append("\\{");
           i++;
         } else {
-          out.append(clampBounds(pattern.substring(i, end)));
+          String q = clampBounds(pattern.substring(i, end));
+          out.append(cur.behind ? capBehind(q) : q);
           i = end;
         }
+        continue;
+      } else if ((ch == '*' || ch == '+') && cur.behind) {
+        out.append(capBehind(ch == '*' ? "{0,}" : "{1,}"));
+        i++;
         continue;
       } else if (ch == '$') {
         out.append(cur.multiline ? "(?!" + JS_NON_TERMINATOR + ")" : "\\z");
@@ -919,6 +938,7 @@ public final class Parser {
     final int cap; // its capture number, 0 if not a capture
     final boolean dotAll; // inside an (?s: group, where . already matches everything
     final boolean multiline; // inside an (?m: group, where ^ and $ also match at line breaks
+    final boolean behind; // inside a lookbehind, where Java needs every quantifier bounded
     int alts = 1;
     boolean minZero; // a quantifier after its ) allows zero repeats
     boolean loop; // a quantifier after its ) can repeat it: *, + or a brace quantifier
@@ -934,6 +954,7 @@ public final class Parser {
       this.cap = cap;
       this.dotAll = dotAll;
       this.multiline = multiline;
+      this.behind = (parent != null && parent.behind) || kind == 'b' || kind == 'B';
     }
 
     boolean negative() {
@@ -1177,6 +1198,20 @@ public final class Parser {
       return p.substring(at + 1, digitsEnd(p, at + 1)).chars().allMatch(c -> c == '0');
     }
     return q == '?' || q == '*';
+  }
+
+  /**
+   * A quantifier inside a lookbehind with its upper bound capped at LOOKBEHIND_MAX (see jsToJava).
+   */
+  private static String capBehind(String q) {
+    String[] b = q.substring(1, q.length() - 1).split(",", -1); // clamped: each fits a long
+    if (b.length != 2) return q;
+    long lo = Long.parseLong(b[0]);
+    long hi = b[1].isEmpty() ? Long.MAX_VALUE : Long.parseLong(b[1]);
+    // lo > hi is a JS SyntaxError: leave it so Java rejects it too
+    return lo <= hi && hi > LOOKBEHIND_MAX
+        ? "{" + b[0] + "," + Math.max(lo, LOOKBEHIND_MAX) + "}"
+        : q;
   }
 
   /**
