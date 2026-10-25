@@ -146,7 +146,8 @@ public final class Paths {
   /** deny (block/challenge/warn) = any spelling; allow/skip = both canonical forms. */
   static boolean hit(Predicate<String> pred, String[] forms, boolean deny) {
     if (deny) {
-      // a form equal to one already tried cannot change the answer, so it is not matched again
+      // a form equal to one already tried is not matched again,
+      // so a repeat never spends the request's regex budget twice
       return pred.test(forms[0])
           || !forms[1].equals(forms[0]) && pred.test(forms[1])
           || !forms[2].equals(forms[0]) && !forms[2].equals(forms[1]) && pred.test(forms[2]);
