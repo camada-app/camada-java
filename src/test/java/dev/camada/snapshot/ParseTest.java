@@ -530,6 +530,41 @@ class ParseTest {
     assertEquals("\\x200", Parser.jsToJava("\\400"));
   }
 
+  // residual E: JDK 17 mis-reads a /i back-reference over a stand-in (node 24: true); find answers
+  // onFailure there, the JS answer where the runtime reads it right
+  @Test
+  void ciBackReferenceOverStandInFailsOpenOnOldJdk() {
+    boolean old = Runtime.version().feature() < 26;
+    String em = "\uD83D\uDE00";
+    for (boolean onFailure : new boolean[] {false, true}) {
+      boolean want = old ? onFailure : true;
+      Pattern a = Parser.compileRegex("^(" + em + ")\\1", Pattern.CASE_INSENSITIVE);
+      Pattern b = Parser.compileRegex("(?i:(" + em + ")\\1)");
+      assertEquals(want, Parser.find(a, em + em + "ab", onFailure));
+      assertEquals(want, Parser.find(b, em + em + "x", onFailure));
+    }
+    // the BMP stand-ins (ß, ſ): JDK 17 misses or throws, JDK 26 and node match
+    for (boolean onFailure : new boolean[] {false, true}) {
+      boolean want = old ? onFailure : true;
+      assertEquals(
+          want,
+          Parser.find(
+              Parser.compileRegex("^(\u017F)\\1", Pattern.CASE_INSENSITIVE),
+              "\u017F\u017Fab",
+              onFailure));
+      assertEquals(
+          want,
+          Parser.find(
+              Parser.compileRegex("^(\u00DF)\\1$", Pattern.CASE_INSENSITIVE),
+              "\u00DF\u00DF",
+              onFailure));
+    }
+    // no /i, or no back-reference, or an escaped backslash before the digit: unchanged
+    assertTrue(Parser.find(Parser.compileRegex("^(" + em + ")\\1$"), em + em));
+    assertTrue(Parser.find(Parser.compileRegex("^(a)\\1", Pattern.CASE_INSENSITIVE), "aAb"));
+    assertTrue(Parser.find(Parser.compileRegex("\\\\1", Pattern.CASE_INSENSITIVE), "\\1" + em));
+  }
+
   // a back-reference to a group that did not participate reads as empty, as in JS (checked with
   // node 24)
   @Test
