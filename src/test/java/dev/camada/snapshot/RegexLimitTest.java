@@ -12,6 +12,7 @@ import dev.camada.snapshot.Matcher.MatchInput;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
@@ -182,17 +183,18 @@ class RegexLimitTest {
    */
   @TestFactory
   Stream<DynamicTest> aNonStringMatchesValueNeverMatches() {
-    List<Object> vals = new ArrayList<>();
-    vals.add(123);
-    vals.add(0);
-    vals.add(true);
-    vals.add(null);
-    vals.add(Map.of("x", 1));
-    vals.add(List.of("^/a"));
-    vals.add(List.of(123));
-    vals.add("");
+    List<Object> vals =
+        Arrays.asList(123, 0, true, null, Map.of("x", 1), List.of("^/a"), List.of(123), "");
     String str = "123 0 null true {x=1} [^/a] {\"x\":1} [123]"; // every coerced spelling
     String big = "a".repeat(Parser.MAX_MATCH_INPUT + 1);
+    Map<String, Object> blk =
+        Map.of(
+            "id",
+            "cr_blk",
+            "action",
+            "block",
+            "conds",
+            List.of(Map.of("f", "ip", "op", "is_not", "v", "1.1.1.1")));
     List<DynamicTest> out = new ArrayList<>();
     for (Object v : vals) {
       for (String f : List.of("ua", "path", "header")) {
@@ -217,14 +219,6 @@ class RegexLimitTest {
                     if (f.equals("header")) {
                       cond.put("name", "x-h");
                     }
-                    Map<String, Object> blk =
-                        Map.of(
-                            "id",
-                            "cr_blk",
-                            "action",
-                            "block",
-                            "conds",
-                            List.of(Map.of("f", "ip", "op", "is_not", "v", "1.1.1.1")));
                     Map<String, Object> b =
                         Map.of("id", "cr_b", "action", "block", "conds", List.of(cond));
                     Map<String, Object> sk =
