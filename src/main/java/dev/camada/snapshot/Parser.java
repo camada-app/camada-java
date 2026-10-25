@@ -1302,6 +1302,10 @@ public final class Parser {
         return i; // {n,m} with n > m is a SyntaxError: leave it
       }
       if (e < s.length() && s.charAt(e) == '?') e++; // lazy
+      if (e < s.length()
+          && ("*+?".indexOf(s.charAt(e)) >= 0 || s.charAt(e) == '{' && quantifierEnd(s, e) > 0)) {
+        return i; // a quantifier after the cut one is a SyntaxError: leave it
+      }
       if (lo.signum() > 0) {
         out.append(s, i, a);
         if (!lo.equals(java.math.BigInteger.ONE)) out.append('{').append(min).append('}');
