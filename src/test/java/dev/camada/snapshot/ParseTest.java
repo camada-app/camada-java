@@ -549,11 +549,15 @@ class ParseTest {
       assertEquals(
           want,
           Parser.find(
-              Parser.compileRegex("^(\u017F)\\1", Pattern.CASE_INSENSITIVE), "\u017F\u017Fab", onFailure));
+              Parser.compileRegex("^(\u017F)\\1", Pattern.CASE_INSENSITIVE),
+              "\u017F\u017Fab",
+              onFailure));
       assertEquals(
           want,
           Parser.find(
-              Parser.compileRegex("^(\u00DF)\\1$", Pattern.CASE_INSENSITIVE), "\u00DF\u00DF", onFailure));
+              Parser.compileRegex("^(\u00DF)\\1$", Pattern.CASE_INSENSITIVE),
+              "\u00DF\u00DF",
+              onFailure));
     }
     // no /i, or no back-reference, or an escaped backslash before the digit: unchanged
     assertTrue(Parser.find(Parser.compileRegex("^(" + em + ")\\1$"), em + em));
