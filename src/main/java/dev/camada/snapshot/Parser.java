@@ -7,6 +7,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -304,32 +305,33 @@ public final class Parser {
   }
 
   /**
-   * The BMP chars that JS's non-u /i folds with nothing else but Java's UNICODE_CASE folds with
-   * another char (U+00DF, U+0130, U+0131, U+017F, U+03F4, U+1E9E, U+1F80-U+1FAF, U+1FB3, U+1FBC,
-   * U+1FC3, U+1FCC, U+1FF3, U+1FFC, U+2126, U+212A, U+212B). Each is a stand-in on both sides, like
-   * a surrogate, so Java cannot fold it.
+   * The code units that are a stand-in on both sides: the surrogates, and the BMP chars JS's non-u
+   * /i folds with nothing else but Java's UNICODE_CASE folds with another (U+00DF, U+0130, U+0131,
+   * U+017F, U+03F4, U+1E9E, U+1F80-U+1FAF, U+1FB3, U+1FBC, U+1FC3, U+1FCC, U+1FF3, U+1FFC, U+2126,
+   * U+212A, U+212B), so Java cannot fold them.
    */
-  private static final String FOLDS_ALONE = foldsAlone();
+  private static final BitSet STAND_IN = standIns();
 
-  private static String foldsAlone() {
-    StringBuilder sb = new StringBuilder("\u00DF\u0130\u0131\u017F\u03F4\u1E9E");
-    for (char c = 0x1F80; c <= 0x1FAF; c++) {
-      sb.append(c);
-    }
-    return sb.append("\u1FB3\u1FBC\u1FC3\u1FCC\u1FF3\u1FFC\u2126\u212A\u212B").toString();
+  private static BitSet standIns() {
+    BitSet s = new BitSet(0xE000);
+    s.set(0xD800, 0xE000);
+    s.set(0x1F80, 0x1FB0);
+    "\u00DF\u0130\u0131\u017F\u03F4\u1E9E\u1FB3\u1FBC\u1FC3\u1FCC\u1FF3\u1FFC\u2126\u212A\u212B"
+        .chars()
+        .forEach(s::set);
+    return s;
   }
 
-  /** Whether {@code c} is a surrogate or one of {@link #FOLDS_ALONE}: it gets a stand-in. */
   private static boolean hasStandIn(char c) {
-    return Character.isSurrogate(c) || (c >= 0xDF && c <= 0x212B && FOLDS_ALONE.indexOf(c) >= 0);
+    return STAND_IN.get(c);
   }
 
   /**
-   * The code point standing for the code unit {@code u}, a surrogate or one of {@link
-   * #FOLDS_ALONE}: plane-15 private use, which has no case and is a non-word, non-space char.
+   * The code point standing for the {@link #STAND_IN} code unit {@code u}: plane-15 private use,
+   * which has no case and is a non-word, non-space char.
    */
   static int standIn(int u) {
-    return u >= 0xD800 && u <= 0xDFFF ? 0xF0000 + (u - 0xD800) : 0xF0800 + u;
+    return 0xF0000 + u;
   }
 
   /** Appends {@code c}, or its stand-in if it has one. */
@@ -342,9 +344,9 @@ public final class Parser {
   }
 
   /**
-   * {@code s} with every surrogate code unit and every char of {@link #FOLDS_ALONE} as its
-   * stand-in, so java.util.regex (which reads code points, and folds those chars) sees the
-   * one-unit-per-char, JS-folded string JS does; {@code s} itself when it has none.
+   * {@code s} with every {@link #STAND_IN} code unit as its stand-in, so java.util.regex (which
+   * reads code points, and folds those chars) sees the one-unit-per-char, JS-folded string JS does;
+   * {@code s} itself when it has none.
    */
   static String unitView(String s) {
     int i = 0;
@@ -421,7 +423,7 @@ public final class Parser {
   private static Pattern compileJava(String js, String pattern, int flags) {
     // JS /i and (?i: fold non-ASCII letters too; Java's i alone folds only ASCII (u is inert
     // where i is off). Java's u also folds letters JS's non-u /i does not (U+212A to k, U+017F to
-    // s, U+0130 and U+0131 to i...): FOLDS_ALONE keeps those out as stand-ins on both sides
+    // s, U+0130 and U+0131 to i...): STAND_IN keeps those out as stand-ins on both sides
     int bs = 0;
     while (bs < js.length() && js.charAt(js.length() - 1 - bs) == '\\') {
       bs++;
@@ -521,8 +523,8 @@ public final class Parser {
    * <p>JS (no {@code u} flag) reads UTF-16 code units, Java code points, so each surrogate unit is
    * a stand-in code point on both sides (see {@link #unitView}): a raw or {@code \\uD83D}-escaped
    * one in the pattern, and a class range over D800-DFFF split around the block. The chars Java's
-   * UNICODE_CASE folds but JS's /i does not ({@link #FOLDS_ALONE}) are stand-ins the same way, and
-   * a class range spanning one also matches its stand-in. {@link #compileRegex} appends an empty
+   * UNICODE_CASE folds but JS's /i does not ({@link #STAND_IN}) are stand-ins the same way, and a
+   * class range spanning one also matches its stand-in. {@link #compileRegex} appends an empty
    * group holding a supplementary char, which makes Java count a lookbehind's length in code points
    * and start a match only on a code point boundary.
    *
@@ -582,8 +584,8 @@ public final class Parser {
           int[] hi = classAtom(pattern, lo[1] + 1);
           if (hi[0] >= 0) {
             atomEnd = hi[1];
-            if (lo[0] <= hi[0]
-                && ((lo[0] <= 0xDFFF && hi[0] >= 0xD800) || foldsAloneIn(lo[0], hi[0]))) {
+            int s = STAND_IN.nextSetBit(lo[0]);
+            if (lo[0] <= hi[0] && s >= 0 && s <= hi[0]) {
               splitRange(out, lo[0], hi[0]);
               i = hi[1];
               continue;
@@ -612,20 +614,14 @@ public final class Parser {
           }
           continue;
         }
-        if (nxt == 'u' && hexRun(pattern, i + 2, 4)) {
-          int u = HexFormat.fromHexDigits(pattern, i + 2, i + 6);
-          if (hasStandIn((char) u)) {
+        int len = nxt == 'u' ? 4 : nxt == 'x' ? 2 : 0;
+        if (len > 0 && hexRun(pattern, i + 2, len)) {
+          char u = (char) HexFormat.fromHexDigits(pattern, i + 2, i + 2 + len);
+          if (hasStandIn(u)) {
             out.appendCodePoint(standIn(u));
-            i += 6;
+            i += 2 + len;
             continue;
           }
-        }
-        if (nxt == 'x'
-            && hexRun(pattern, i + 2, 2)
-            && pattern.regionMatches(true, i + 2, "DF", 0, 2)) {
-          out.appendCodePoint(standIn(0xDF));
-          i += 4;
-          continue;
         }
         Emit ref = refs.text.get(i);
         if (ref != null) {
@@ -654,8 +650,8 @@ public final class Parser {
             continue;
           }
           int[] oct = octal(pattern, i);
-          if (oct[0] == 0xDF) {
-            out.appendCodePoint(standIn(0xDF));
+          if (hasStandIn((char) oct[0])) {
+            out.appendCodePoint(standIn(oct[0]));
           } else {
             out.append(String.format("\\x%02X", oct[0]));
           }
@@ -802,55 +798,22 @@ public final class Parser {
     return new int[] {v, j};
   }
 
-  private static boolean foldsAloneIn(int lo, int hi) {
-    for (int k = 0; k < FOLDS_ALONE.length(); k++) {
-      if (FOLDS_ALONE.charAt(k) >= lo && FOLDS_ALONE.charAt(k) <= hi) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   /**
-   * A class range lo-hi that overlaps D800-DFFF or spans a {@link #FOLDS_ALONE} char: the BMP
-   * pieces between them as they are, the surrogate block and each such char as stand-ins. (A raw
-   * range over one of those chars would let JDK 21+ fold it with its Java partner.)
+   * A class range lo-hi holding a {@link #STAND_IN} unit: each run of other units as it is, each
+   * run of stand-in units as the range of their stand-ins. (JDK 26 still folds a raw range over a
+   * char Java folds, so none is left in it.)
    */
   private static void splitRange(StringBuilder out, int lo, int hi) {
-    if (lo < 0xD800) {
-      rawRange(out, lo, Math.min(hi, 0xD7FF));
-    }
-    if (lo <= 0xDFFF && hi >= 0xD800) {
-      out.appendCodePoint(standIn(Math.max(lo, 0xD800)))
-          .append('-')
-          .appendCodePoint(standIn(Math.min(hi, 0xDFFF)));
-    }
-    if (hi > 0xDFFF) {
-      rawRange(out, Math.max(lo, 0xE000), hi);
-    }
-    for (int k = 0; k < FOLDS_ALONE.length(); k++) {
-      char c = FOLDS_ALONE.charAt(k);
-      if (c >= lo && c <= hi) {
-        out.appendCodePoint(standIn(c));
+    for (int a = lo; a <= hi; ) {
+      boolean in = STAND_IN.get(a);
+      int next = in ? STAND_IN.nextClearBit(a) : STAND_IN.nextSetBit(a);
+      int b = next < 0 || next > hi ? hi : next - 1;
+      if (in) {
+        out.appendCodePoint(standIn(a)).append('-').appendCodePoint(standIn(b));
+      } else {
+        out.append(String.format("\\x{%X}-\\x{%X}", a, b));
       }
-    }
-  }
-
-  /** The range lo-hi, without any {@link #FOLDS_ALONE} char (they are in ascending order). */
-  private static void rawRange(StringBuilder out, int lo, int hi) {
-    int from = lo;
-    for (int k = 0; k < FOLDS_ALONE.length() && from <= hi; k++) {
-      int c = FOLDS_ALONE.charAt(k);
-      if (c < from || c > hi) {
-        continue;
-      }
-      if (c > from) {
-        out.append(String.format("\\x{%X}-\\x{%X}", from, c - 1));
-      }
-      from = c + 1;
-    }
-    if (from <= hi) {
-      out.append(String.format("\\x{%X}-\\x{%X}", from, hi));
+      a = b + 1;
     }
   }
 
