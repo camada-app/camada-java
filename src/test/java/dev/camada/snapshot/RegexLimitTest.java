@@ -29,7 +29,7 @@ import org.junit.jupiter.api.TestFactory;
  * from camada-core's regex-limit-vectors.json (pinned by sha256), never a local copy.
  */
 class RegexLimitTest {
-  static final String PIN = "b01e86bd2bead280081f58d31f7f517131d8cafa6144b8c27fe868e3c3959d56";
+  static final String PIN = "d549b323af4ba9b863a401a474da77baee46711832d1ef4241986bafc0bffc15";
   static final String REL = "regex-limit/regex-limit-vectors.json";
   static final Map<String, Object> V = Fixtures.readMeta(REL);
   static final Duration LOOSE = Duration.ofSeconds(20);
@@ -105,15 +105,20 @@ class RegexLimitTest {
 
   @TestFactory
   Stream<DynamicTest> refusedFallBackToNative() {
-    return nativeCases("refused");
+    return nativeCases("refused", "native");
   }
 
   @TestFactory
   Stream<DynamicTest> acceptedMatchNative() {
-    return nativeCases("accepted_match");
+    return nativeCases("accepted_match", "native");
   }
 
-  static Stream<DynamicTest> nativeCases(String key) {
+  @TestFactory
+  Stream<DynamicTest> astralSplitPerEngine() {
+    return nativeCases("astral_split", "java");
+  }
+
+  static Stream<DynamicTest> nativeCases(String key, String engine) {
     assertFalse(rows(key).isEmpty());
     Map<String, Object> base = Json.asMap(V.get("refused_rule"));
     List<DynamicTest> out = new ArrayList<>();
@@ -131,7 +136,7 @@ class RegexLimitTest {
         Map<String, Object> input = new HashMap<>();
         input.put("ip", "8.8.8.8");
         input.put("ua", get(c, "ua"));
-        boolean want = (Boolean) Json.asMap(get(c, "hit")).get("native");
+        boolean want = (Boolean) Json.asMap(get(c, "hit")).get(engine);
         out.add(
             DynamicTest.dynamicTest(
                 r.get("id") + "#" + k++, () -> assertEquals(want, hit(rule, input))));
