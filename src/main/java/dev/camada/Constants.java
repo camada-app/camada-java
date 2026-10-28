@@ -8,9 +8,9 @@ public final class Constants {
 
   /**
    * Tap identifier this SDK claims on the wire. The server validates against its own enum and
-   * decides itself what each tap can see: an SDK can never grant
-   * itself more than that, only name its position — and an unknown name is silently read as a
-   * proxy, so this literal is load-bearing.
+   * decides itself what each tap can see: an SDK can never grant itself more than that, only name
+   * its position — and an unknown name is silently read as a proxy, so this literal is
+   * load-bearing.
    */
   public static final String TAP = "sdk-java";
 
