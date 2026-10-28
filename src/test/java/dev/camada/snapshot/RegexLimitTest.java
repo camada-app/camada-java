@@ -29,7 +29,7 @@ import org.junit.jupiter.api.TestFactory;
  * from camada-core's regex-limit-vectors.json (pinned by sha256), never a local copy.
  */
 class RegexLimitTest {
-  static final String PIN = "5170b6c2f37da4a9c892b45e344a0d5ae49a6d99c9a5bfe0659809b5b90df7a0";
+  static final String PIN = "2298be3b596814ae958d9016707eddf32f54a44bfd7567dfda6c488484546b13";
   static final String REL = "regex-limit/regex-limit-vectors.json";
   static final Map<String, Object> V = Fixtures.readMeta(REL);
   static final Duration LOOSE = Duration.ofSeconds(20);
