@@ -14,13 +14,22 @@
 
   <name>camada</name>
   <description>camada SDK for Java: inline enforcement of your snapshot (ordered custom rules, then allow, block, challenge), first-party beacon and proof-of-work challenge, batched event shipping. A jakarta.servlet Filter for Spring Boot, Tomcat, Jetty and Undertow.</description>
-  <url>https://camada.app</url>
+  <url>https://www.camada.app/docs/java</url>
   <licenses>
     <license>
       <name>MIT</name>
       <url>https://opensource.org/licenses/MIT</url>
     </license>
   </licenses>
+  <scm>
+    <url>https://github.com/camada-app/camada-java</url>
+    <connection>scm:git:https://github.com/camada-app/camada-java.git</connection>
+    <developerConnection>scm:git:git@github.com:camada-app/camada-java.git</developerConnection>
+  </scm>
+  <issueManagement>
+    <system>GitHub Issues</system>
+    <url>https://github.com/camada-app/camada-java/issues</url>
+  </issueManagement>
 
   <properties>
     <maven.compiler.release>17</maven.compiler.release>

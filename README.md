@@ -19,6 +19,14 @@ mvn -q -f ../camada-java install -DskipTests
 Publishing is one decision with the npm packages (SDK-G01). Java 17 or newer; the only runtime
 dependency is the servlet API your container already provides.
 
+## Documentation
+
+- [Java SDK guide](https://www.camada.app/docs/java): options, `jakarta.servlet.Filter` setup, and container proxy rules.
+- [Spring Boot quickstart](https://www.camada.app/docs/quickstart/spring): register `CamadaFilter` at highest precedence.
+- [In-app bot detection](https://www.camada.app/bot-detection): how camada stops credential stuffing, fake signups, and scrapers.
+- [Test your bot signals](https://www.camada.app/tools/bot-test): live browser, HTTP, and TLS signal inspector.
+- [Docs](https://www.camada.app/docs) and [Pricing](https://www.camada.app/pricing): full reference and plan limits.
+
 ## Quickstart
 
 ```xml
@@ -86,7 +94,7 @@ request. That build starts the snapshot poll on a daemon thread and never blocks
 that triggered it is answered cold: it passes (fail open), and so does anything else that arrives
 before that first poll lands (a few hundred milliseconds against a local analyst; snapshot-size
 and network bound). To enforce from request 1, warm the engine at startup by waiting for the boot
-poll — `snapshot().refresh()` alone is not it, the boot poll already holds the single-in-flight
+poll. `snapshot().refresh()` alone is not it, because the boot poll already holds the single-in-flight
 lock:
 
 ```java
@@ -103,14 +111,14 @@ ApplicationRunner camadaWarmUp() {
 }
 ```
 
-(Elsewhere — a `ServletContextListener`, the end of `main()` — it is the same call: `Camada.getDefault().warmUp(5000);`.)
+(Elsewhere, such as a `ServletContextListener` or the end of `main()`, it is the same call: `Camada.getDefault().warmUp(5000);`.)
 
 `warmUp(ms)` is bounded and never throws: false when the engine is inert, killed, or the analyst
 did not answer in time. When the filter was handed `Options`, warm through `camadaFilter.engine()`
 so the default is built with them.
 
 Without `CAMADA_KEY` the engine is inert (one log line, no requests, no enforcement). An app that
-reads its own config builds the engine itself and hands it in — or hands the filter the options
+reads its own config builds the engine itself and hands it in, or hands the filter the options
 it should build the default engine with:
 
 ```java
@@ -144,9 +152,9 @@ run for, before the filter's first request, they are silent no-ops rather than a
 1. Keeps the snapshot fresh. A JVM is a long-lived process, so the default is a daemon poll thread
    (`camada-snapshot`) at the cadence your tenant config sets (`poll_seconds`, at least 5 s), with
    ETag/304 and gzip on the wire. `CAMADA_SERVERLESS=1` switches to a per-request staleness check
-   that hands a refresh to the same daemon thread — the request path never waits on the network.
+   that hands a refresh to the same daemon thread: the request path never waits on the network.
    Every poll and event batch carries `x-camada-sdk: @camada/java/<version>`, and polls ask for
-   snapshot v5 (`x-camada-snapshot: 5`) — the container that carries your ordered custom rules.
+   snapshot v5 (`x-camada-snapshot: 5`), the container that carries your ordered custom rules.
 2. Resolves the client from the socket peer (`getRemoteAddr()`), combined with `X-Forwarded-For`
    only under your tenant's trusted-proxy config (or `CAMADA_TRUSTED_PROXY` locally). A forwarded
    header on its own is never the ip: any caller can set it. Under `cidrs` (also what the
@@ -162,7 +170,7 @@ run for, before the filter's first request, they are silent no-ops rather than a
    filter init-param `camada.unixSocketListener=true`): requests then have no peer and the walk
    reads `X-Forwarded-For` alone, trusting the front end on the socket to have written it. The
    setting decides this, never the shape of the peer string. Keep the container's own forwarded-
-   header handling off (Spring Boot: `server.forward-headers-strategy=none`, the default) — a
+   header handling off (Spring Boot: `server.forward-headers-strategy=none`, the default): a
    `RemoteIpValve` would rewrite the peer before camada judges the header.
 3. Enforces before anything else, beacon endpoints included: your ordered custom rules first (first
    match wins; they read ip, path, user-agent and request headers), then allow → block → challenge.
@@ -177,19 +185,19 @@ run for, before the filter's first request, they are silent no-ops rather than a
    `_cch` (bound to the ip, one hour) and 302s back. A request whose ip cannot be resolved is never challenged.
 5. Serves the beacon: `GET /_cam/b.js` (the `@camada/browser` build, vendored into the jar) and
    `POST /_cam/fp` (≤ 32 KB, relayed onto the event batch as a `sig: 1` row with the ip camada
-   resolved). Both fall through to your app when the tenant switched the beacon off — with the
+   resolved). Both fall through to your app when the tenant switched the beacon off, with the
    body camada may already have read replayed to the app whole.
 6. Runs your app with `x-rid` (the rid of the request's event row; never on a websocket handshake,
    which the container answers 101) and the `_sfp` session cookie on its response (stamped before
-   the chain runs, so your handlers see them too), and when the response is done — after the chain
-   returns, or in `AsyncListener.onComplete` when the app went async — ships one redacted event:
+   the chain runs, so your handlers see them too), and when the response is done (after the chain
+   returns, or in `AsyncListener.onComplete` when the app went async) ships one redacted event:
    method, host, path, scrubbed query, status, latency, header names/sizes/order, the auth scheme
    (never the credential), cookie count (never values), and the matched route pattern (`rt`) when
    Spring MVC set one. An exception in your app ships as `st: 500` and propagates unchanged.
 
-The engine's seam is host-neutral — `wantsBody(method, path)`, `handle(Req, body)` returning an
-`Answer` (camada wrote the response) or a `Passed` (run the app; `rid`, `setCookie`, the
-`Context`, `onFinish(status)`) — so another host is one adapter away. `CamadaFilter` handles the
+The engine's seam is host-neutral (`wantsBody(method, path)`, `handle(Req, body)` returning an
+`Answer` when camada wrote the response or a `Passed` to run the app with `rid`, `setCookie`, the
+`Context`, `onFinish(status)`), so another host is one adapter away. `CamadaFilter` handles the
 original `REQUEST` dispatch only; `ASYNC`, `ERROR`, `FORWARD` and `INCLUDE` dispatches pass through.
 
 ## Options
@@ -256,7 +264,7 @@ name is free-form; the analyst's app-context rules read this vocabulary:
 | `coupon_failed` | a promo/voucher code was rejected |
 
 A route you gate yourself: `Camada.serveChallenge(request, response)` writes the page for a page
-load and returns true until the browser holds a valid `_cch`, then false — render your own page
+load and returns true until the browser holds a valid `_cch`, then false: render your own page
 then. A non-HTML request also gets false: it is signalled (`x-camada-challenge: 1`, `no-store`,
 `chs: 1`). The per-request `Context` (`rid`, `sid`, `ip`) is the `"camada"` request attribute.
 
@@ -264,10 +272,10 @@ then. A non-HTML request also gets false: it is signalled (`x-camada-challenge: 
 
 `sdk-java` is an in-app tap: status, latency, session, the beacon's browser signals and your
 outcomes, plus the wire's header order (`hord`) as the container hands it over. camada resolves ASN and country itself. Enforcement at this position covers ip, path,
-user-agent and header conditions — ASN, country and TLS entries fail open in-app. `matches`
+user-agent and header conditions: ASN, country and TLS entries fail open in-app. `matches`
 patterns are JS regexes read by `java.util.regex` (named groups, `[^]`, `\cX` and a bare `$` are
-translated; `\d`/`\w`/`\b` stay ASCII); a spelling the engine still rejects — or a pattern it
-cannot run against a request without overflowing the thread's stack — never matches here, while
+translated; `\d`/`\w`/`\b` stay ASCII); a spelling the engine still rejects (or a pattern it
+cannot run against a request without overflowing the thread's stack) never matches here, while
 it does at the edge.
 
 ## Deploying it
@@ -275,9 +283,9 @@ it does at the edge.
 - Every JVM polls its own snapshot (about 5 MB resident) and flushes its own batches; the tenant's
   `poll_seconds` keeps the cadence honest across a fleet. Both threads are daemons: they never keep
   a JVM alive.
-- Pending events drain at exit within half a second, from a JVM shutdown hook — which runs on
+- Pending events drain at exit within half a second, from a JVM shutdown hook, which runs on
   SIGTERM as well as on a normal exit, an upgrade over the reference port's `atexit`: a container
-  stopped by its orchestrator keeps its last batch. No signal handlers are installed — an app owns
+  stopped by its orchestrator keeps its last batch. No signal handlers are installed: an app owns
   its own shutdown. A JVM does not fork, so there is no fork handling to speak of (the reference
   port's `register_at_fork` cases have no Java twin; the warm-up recipe above is tested in the
   engine suite instead).
