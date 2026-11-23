@@ -5,6 +5,7 @@ import dev.camada.Camada;
 import dev.camada.Guarded;
 import dev.camada.Options;
 import dev.camada.Passed;
+import dev.camada.Redact;
 import dev.camada.Req;
 import dev.camada.Result;
 import jakarta.servlet.AsyncEvent;
@@ -25,7 +26,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -239,7 +239,7 @@ public final class CamadaFilter implements Filter {
         if (values == null) {
           continue;
         }
-        String lower = name.toLowerCase(Locale.ROOT);
+        String lower = Redact.asciiLower(name);
         while (values.hasMoreElements()) {
           headers.add(new AbstractMap.SimpleEntry<>(lower, values.nextElement()));
         }

@@ -7,6 +7,7 @@ import dev.camada.challenge.Kit;
 import dev.camada.challenge.Page;
 import dev.camada.events.Builder;
 import dev.camada.events.Builder.RequestInfo;
+import dev.camada.events.Builder.Token;
 import dev.camada.events.Queue;
 import dev.camada.snapshot.Client;
 import dev.camada.snapshot.Matcher.MatchInput;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Function;
 import java.util.function.IntConsumer;
 
 /**
@@ -63,6 +65,8 @@ public class Camada {
   private final Client snap;
   private final Queue queue;
   private final Kit kit;
+  private final String tokenHeader;
+  Function<String, String> tokenHasher;
 
   public Camada() {
     this(new Options());
@@ -76,10 +80,23 @@ public class Camada {
     challengeOn = o.challenge() && !"0".equals(source.get("CAMADA_CHALLENGE"));
     env = Env.resolve(source);
     if (env == null || "1".equals(source.get(Constants.KILL_SWITCH_ENV))) {
+      tokenHeader = null;
       snap = null; // unconfigured or killed at boot: no threads, no exit hooks, truly silent
       queue = null;
       kit = null;
       return;
+    }
+    String optionHeader = o.tokenHeader();
+    String envHeader = source.get("CAMADA_TOKEN_HEADER");
+    tokenHeader = Config.tokenHeader(optionHeader, envHeader);
+    if (tokenHeader == null
+        && ((optionHeader != null && !optionHeader.isEmpty())
+            || (envHeader != null && !envHeader.isEmpty()))) {
+      Guarded.logOnce("token-header", "[camada] Ignoring invalid or forbidden token header name");
+    }
+    if (Config.tokenHash(o.tokenHash(), source.get("CAMADA_TOKEN_HASH"))) {
+      String ingestToken = env.ingestToken();
+      tokenHasher = credential -> Redact.hashToken(credential, ingestToken);
     }
     Client c =
         new Client(env.snapshotUrl(), env.snapToken())
@@ -447,7 +464,8 @@ public class Camada {
             req.headers(),
             ip,
             req.httpVersion());
-    return Builder.build(info, Constants.TAP, rid, sid, newSession, null);
+    Token token = tokenHasher == null ? null : new Token(tokenHeader, tokenHasher);
+    return Builder.build(info, Constants.TAP, rid, sid, newSession, null, token);
   }
 
   // ---- beacon ----

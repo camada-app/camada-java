@@ -211,6 +211,8 @@ original `REQUEST` dispatch only; `ASYNC`, `ERROR`, `FORWARD` and `INCLUDE` disp
 | `refreshS(double)` | server-steered | poll cadence; set, it is pinned |
 | `challenge(boolean)` | `true` | serve the proof-of-work page for challenge verdicts (`CAMADA_CHALLENGE=0` too) |
 | `challengePath(String)` | `/__camada/challenge` | where the page posts its solution |
+| `tokenHash(boolean)` | off | opt in to credential hashing with `true` |
+| `tokenHeader(String)` | unset | extra credential header to try before `Authorization` |
 | `snapshotVersion(int)` | `5` | 4 drops your custom rules; 3 the allow/challenge sides too |
 | `scriptPath` / `fpPath` | `/_cam/b.js` / `/_cam/fp` | the beacon endpoints; keep them in one directory |
 
@@ -218,6 +220,25 @@ Env: `CAMADA_KEY` (or `CAMADA_TOKEN` + `CAMADA_SNAPSHOT_TOKEN`), `CAMADA_INGEST_
 `CAMADA_SNAPSHOT_URL`, `CAMADA_TRUSTED_PROXY` (`none | vercel | hops:N | cidrs:a,b`),
 `CAMADA_SERVERLESS=1`, `CAMADA_CHALLENGE=0`, and the kill switch `CAMADA_DISABLED=1` (checked per
 request; set at boot, no threads start at all).
+
+### Credential hashing
+
+Set `new Options().tokenHash(true)` or export `CAMADA_TOKEN_HASH=1` to enable
+credential hashing. The explicit option takes precedence, so `tokenHash(false)`
+disables hashing even when the environment sets it.
+
+Use `tokenHeader("X-Api-Key")` or `CAMADA_TOKEN_HEADER=X-Api-Key` to try an extra
+header before `Authorization`. A non-empty option takes precedence. Header names
+are case-insensitive and must be 1–64 ASCII letters, digits or hyphens.
+Invalid names and `Authorization`, `Cookie` and `Set-Cookie` are ignored as
+extra headers.
+
+Request rows, including blocked requests, can carry `tk`. It contains the first
+32 lowercase hex characters of HMAC-SHA256 over `tok:` followed by the
+credential, keyed by the ingest token. The raw credential is never part of
+`tk`. The field is absent when hashing is off, no usable credential is exposed
+or hashing fails. Enable it only for random tokens or API keys. Keep it off
+for Basic authentication with human passwords.
 
 ## The first-party beacon
 

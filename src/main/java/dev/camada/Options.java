@@ -16,6 +16,8 @@ public final class Options {
   private int snapshotVersion = Constants.DEFAULT_SNAPSHOT_VERSION;
   private String scriptPath = Constants.SCRIPT_PATH;
   private String fpPath = Constants.FP_PATH;
+  private Boolean tokenHash;
+  private String tokenHeader;
 
   /** Where CAMADA_* are read from; defaults to {@code System.getenv()}. */
   public Options env(Map<String, String> env) {
@@ -67,6 +69,18 @@ public final class Options {
     return this;
   }
 
+  /** Opt in to credential hashing, or explicitly override CAMADA_TOKEN_HASH. */
+  public Options tokenHash(boolean on) {
+    this.tokenHash = on;
+    return this;
+  }
+
+  /** The extra credential header to try before Authorization. */
+  public Options tokenHeader(String name) {
+    this.tokenHeader = name;
+    return this;
+  }
+
   public Map<String, String> env() {
     return env;
   }
@@ -97,5 +111,13 @@ public final class Options {
 
   public String fpPath() {
     return fpPath;
+  }
+
+  public Boolean tokenHash() {
+    return tokenHash;
+  }
+
+  public String tokenHeader() {
+    return tokenHeader;
   }
 }

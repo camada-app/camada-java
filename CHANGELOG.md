@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add opt-in credential hashing on request rows with `tokenHash` or `CAMADA_TOKEN_HASH=1`. The `tk` field carries a keyed hash. The beacon relay strips visitor-supplied `tk`, `bf` and `upf`. (camada-all-29aa)
+
 ## 0.2.0 - 2026-10-26
 
 - fix (security): snapshot meta `pathsRegex` entries are now tested like a path `matches` rule condition, and inside the request's regex budget shared with the rule walk. They are case-insensitive, a pattern this SDK refuses never matches, and a path over 2048 chars, an engine failure or a spent budget answers block. Previously they ran outside the budget, and a failure was a miss. They also gain the rule compiler's native `\b` twin on JDK 19+ (parity with rules). `Snapshot.pathsRegex()` is now a `List<Predicate<String>>`. (camada-all-rvuh)

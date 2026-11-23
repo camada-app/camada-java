@@ -24,6 +24,7 @@ public final class Redact {
   private static final Pattern NAME_RE =
       Pattern.compile(
           "(pass(word)?|tok(en)?|secret|key|api[-_]?key|auth|sess(ion)?|sig(nature)?|code|jwt|bearer|credential)");
+  private static final Pattern SCHEME_RE = Pattern.compile("[A-Za-z0-9!#$%&'*+.^_`|~-]{1,16}");
   private static final Pattern JWT_RE = Pattern.compile("eyJ[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9_-]{6,}");
   private static final Pattern HEX_RE = Pattern.compile("[a-fA-F0-9]{32,}");
   private static final Pattern B64_RE = Pattern.compile("[A-Za-z0-9+/_-]{40,}={0,2}");
@@ -38,15 +39,23 @@ public final class Redact {
         || B64_RE.matcher(v).matches();
   }
 
-  /** Lowercase A-Z only, then a substring search: ASCII-only case folding by construction. */
   private static boolean nameHit(String n) {
-    char[] c = n.toCharArray();
-    for (int i = 0; i < c.length; i++) {
-      if (c[i] >= 'A' && c[i] <= 'Z') {
-        c[i] = (char) (c[i] + 32);
+    return NAME_RE.matcher(asciiLower(n)).find();
+  }
+
+  /** Lowercase ASCII A-Z only, leaving all other characters untouched. */
+  public static String asciiLower(String value) {
+    char[] chars = null;
+    for (int i = 0; i < value.length(); i++) {
+      char c = value.charAt(i);
+      if (c >= 'A' && c <= 'Z') {
+        if (chars == null) {
+          chars = value.toCharArray();
+        }
+        chars[i] = (char) (c + ('a' - 'A'));
       }
     }
-    return NAME_RE.matcher(new String(c)).find();
+    return chars == null ? value : new String(chars);
   }
 
   private static int hexVal(char c) {
@@ -207,6 +216,62 @@ public final class Redact {
    */
   public static String hashUserId(String userId, String ingestToken) {
     return hmacSha256Hex(ingestToken, "uid:" + userId).substring(0, 32);
+  }
+
+  /** The scheme from an untrimmed Authorization value, if it has a scheme followed by a space. */
+  public static String authScheme(String value) {
+    if (value == null) {
+      return null;
+    }
+    int sp = schemeEnd(value, 0, value.length());
+    return sp < 0 ? null : value.substring(0, sp);
+  }
+
+  private static int schemeEnd(String value, int start, int end) {
+    int sp = value.indexOf(' ', start);
+    return sp > start && sp < end && SCHEME_RE.matcher(value).region(start, sp).matches() ? sp : -1;
+  }
+
+  /** Extracts the printable ASCII credential, trimming only space and horizontal tab. */
+  public static String credential(String value, boolean schemeSplit) {
+    if (value == null) {
+      return null;
+    }
+    int end = value.length();
+    while (end > 0 && isSpaceOrTab(value.charAt(end - 1))) {
+      end--;
+    }
+    int start = skipSpaceOrTab(value, 0, end);
+    int sp = schemeSplit ? schemeEnd(value, start, end) : -1;
+    if (sp >= 0) {
+      start = skipSpaceOrTab(value, sp + 1, end);
+    }
+    if (end - start < 8) {
+      return null;
+    }
+    for (int i = start; i < end; i++) {
+      char c = value.charAt(i);
+      if (c < 0x20 || c > 0x7E) {
+        return null;
+      }
+    }
+    return value.substring(start, end);
+  }
+
+  private static int skipSpaceOrTab(String value, int start, int end) {
+    while (start < end && isSpaceOrTab(value.charAt(start))) {
+      start++;
+    }
+    return start;
+  }
+
+  private static boolean isSpaceOrTab(char c) {
+    return c == ' ' || c == '\t';
+  }
+
+  /** HMAC of a credential, keyed by the ingest token and truncated to 32 lowercase hex chars. */
+  public static String hashToken(String credential, String ingestToken) {
+    return hmacSha256Hex(ingestToken, "tok:" + credential).substring(0, 32);
   }
 
   /** HMAC-SHA256 as lower-case hex; the one primitive the challenge kit shares with this file. */
