@@ -1,12 +1,14 @@
 package dev.camada;
 
 import dev.camada.Config.RemoteConfig;
+import dev.camada.Config.TokenHeader;
 import dev.camada.Config.TrustedProxy;
 import dev.camada.challenge.Format;
 import dev.camada.challenge.Kit;
 import dev.camada.challenge.Page;
 import dev.camada.events.Builder;
 import dev.camada.events.Builder.RequestInfo;
+import dev.camada.events.Builder.Token;
 import dev.camada.events.Queue;
 import dev.camada.snapshot.Client;
 import dev.camada.snapshot.Matcher.MatchInput;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Function;
 import java.util.function.IntConsumer;
 
 /**
@@ -63,6 +66,8 @@ public class Camada {
   private final Client snap;
   private final Queue queue;
   private final Kit kit;
+  private final Token token;
+  Function<String, String> tokenHasher;
 
   public Camada() {
     this(new Options());
@@ -76,10 +81,23 @@ public class Camada {
     challengeOn = o.challenge() && !"0".equals(source.get("CAMADA_CHALLENGE"));
     env = Env.resolve(source);
     if (env == null || "1".equals(source.get(Constants.KILL_SWITCH_ENV))) {
+      token = null;
       snap = null; // unconfigured or killed at boot: no threads, no exit hooks, truly silent
       queue = null;
       kit = null;
       return;
+    }
+    TokenHeader tokenHeader =
+        Config.resolveTokenHeader(o.tokenHeader(), source.get("CAMADA_TOKEN_HEADER"));
+    if (tokenHeader.invalid()) {
+      Guarded.logOnce("token-header", "[camada] Ignoring invalid or forbidden token header name");
+    }
+    if (Config.tokenHash(o.tokenHash(), source.get("CAMADA_TOKEN_HASH"))) {
+      String ingestToken = env.ingestToken();
+      tokenHasher = credential -> Redact.hashToken(credential, ingestToken);
+      token = new Token(tokenHeader.name(), credential -> tokenHasher.apply(credential));
+    } else {
+      token = null;
     }
     Client c =
         new Client(env.snapshotUrl(), env.snapToken())
@@ -447,7 +465,7 @@ public class Camada {
             req.headers(),
             ip,
             req.httpVersion());
-    return Builder.build(info, Constants.TAP, rid, sid, newSession, null);
+    return Builder.build(info, Constants.TAP, rid, sid, newSession, null, token);
   }
 
   // ---- beacon ----

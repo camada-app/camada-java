@@ -6,8 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.camada.events.Builder;
 import dev.camada.events.Builder.RequestInfo;
+import dev.camada.events.Builder.Token;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -17,10 +19,10 @@ import org.junit.jupiter.api.TestFactory;
 /**
  * The SDK conformance cases (contract C6) every server SDK runs: client-IP resolution
  * (camada-all-0vho XFF ports, camada-all-yfc6 peer-first cidrs walk), the Referer scrub and the
- * request's own query scrub (camada-all-ijsa), fixture version 3. The files live in
- * camada-core/test/fixtures; a missing file fails by name, never skips. No case is skipped here.
- * Configs go through {@link Config#trustedProxy}, the same parse the analyst-delivered tenant
- * config takes.
+ * request's own query scrub (camada-all-ijsa), plus the opt-in token hash (camada-all-29aa). The
+ * files live in camada-core/test/fixtures; a missing file fails by name, never skips. No case is
+ * skipped here. Configs go through {@link Config#trustedProxy}, the same parse the
+ * analyst-delivered tenant config takes.
  */
 class SdkConformanceTest {
   @TestFactory
@@ -114,6 +116,54 @@ class SdkConformanceTest {
     }
     assertFalse(out.isEmpty(), "redact/query.json has no cases");
     return out.stream();
+  }
+
+  @TestFactory
+  Stream<DynamicTest> tokenHash() {
+    Map<String, Object> doc = Fixtures.readMeta("redact/token.json");
+    assertEquals(1, ((Number) doc.get("version")).intValue());
+    List<?> cases = (List<?>) doc.get("cases");
+    assertEquals(22, cases.size());
+    return cases.stream()
+        .map(
+            raw -> {
+              Map<String, Object> c = Json.asMap(raw);
+              return DynamicTest.dynamicTest(
+                  (String) c.get("id"),
+                  () -> {
+                    Map<String, String> headers = new LinkedHashMap<>();
+                    Json.asMap(c.get("headers"))
+                        .forEach((name, value) -> headers.put(name, (String) value));
+                    String extra =
+                        Config.resolveTokenHeader((String) c.get("tokenHeader"), null).name();
+                    assertEquals(c.get("credential"), Redact.selectCredential(headers, extra));
+
+                    RequestInfo req =
+                        new RequestInfo(
+                            "GET",
+                            "shop.test",
+                            "/api/me",
+                            "",
+                            new ArrayList<>(headers.entrySet()),
+                            "1.2.3.4",
+                            "1.1");
+                    String key = (String) c.get("key");
+                    Map<String, Object> ev =
+                        Builder.build(
+                            req,
+                            "sdk-java",
+                            "r1",
+                            null,
+                            false,
+                            null,
+                            new Token(extra, value -> Redact.hashToken(value, key)));
+                    if (c.get("tk") == null) {
+                      assertFalse(ev.containsKey("tk"));
+                    } else {
+                      assertEquals(c.get("tk"), ev.get("tk"));
+                    }
+                  });
+            });
   }
 
   @org.junit.jupiter.api.Test

@@ -36,7 +36,7 @@ public final class Constants {
   static final Set<String> REQUEST_ROW_KEYS =
       Set.of(
           "tlsx", "ja4", "asn", "cc", "sid", "ns", "st", "dur", "rt", "blk", "rl", "wrn", "chs",
-          "ch", "et", "uid");
+          "ch", "et", "uid", "tk", "bf", "upf");
 
   public static final String CHALLENGE_PATH = "/__camada/challenge";
 

@@ -31,6 +31,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -129,6 +133,112 @@ class EngineTest {
 
     Context ctx(int i) {
       return (Context) seen().get(i).getAttribute("camada");
+    }
+  }
+
+  static Call authenticated(Call call) {
+    return call.header("Authorization", "Bearer fake-token-0001-not-a-real-credential");
+  }
+
+  @Nested
+  class TokenHash {
+    @Test
+    void omitsTheKeyOnFinishAndBlockByDefault() {
+      Host h = new Host();
+      assertEquals(200, h.call(authenticated(new Call("GET", "/"))).status());
+      assertEquals(403, h.call(authenticated(new Call("GET", "/")).peer(BLOCKED_IP)).status());
+      List<Map<String, Object>> rows = h.events();
+      assertEquals(2, rows.size());
+      assertEquals(200L, num(rows.get(0), "st"));
+      assertEquals(403L, num(rows.get(1), "st"));
+      for (Map<String, Object> row : rows) {
+        assertFalse(row.containsKey("tk"));
+      }
+    }
+
+    @Test
+    void envOptInHashesFinishBlockChallengeAndVerifyRows() {
+      analyst.container = "v4";
+      Host h = new Host(Map.of("CAMADA_TOKEN_HASH", "1"));
+      assertEquals(200, h.call(authenticated(new Call("GET", "/"))).status());
+      assertEquals(403, h.call(authenticated(new Call("GET", "/")).peer(BLOCKED_IP)).status());
+      Reply challenge = h.call(authenticated(html(new Call("GET", "/"))).peer(CHALLENGED_IP));
+      assertEquals(403, challenge.status());
+      assertEquals("1", challenge.header("x-camada-challenge"));
+      String nonce = nonceOf(challenge.text());
+      Reply verify =
+          h.call(
+              authenticated(new Call("POST", Constants.CHALLENGE_PATH))
+                  .peer(CHALLENGED_IP)
+                  .body("nonce=" + nonce + "&solution=" + ChallengeTest.solve(nonce) + "&to=%2F"));
+      assertEquals(302, verify.status());
+
+      h.engine.track(h.ctx(0), "signup", null);
+      List<Map<String, Object>> rows = h.events();
+      assertEquals(5, rows.size());
+      assertEquals(200L, num(rows.get(0), "st"));
+      assertEquals("ip4", rows.get(1).get("blk"));
+      assertEquals("challenge", rows.get(2).get("blk"));
+      assertEquals(1L, num(rows.get(3), "ch"));
+      for (Map<String, Object> row : rows.subList(0, 4)) {
+        assertEquals("bebdc4a6f2d6e3d79e1ca87a62fbcb35", row.get("tk"));
+        assertFalse(Json.stringify(row).contains("fake-token-0001-not-a-real-credential"));
+      }
+      assertEquals("signup", rows.get(4).get("et"));
+      assertFalse(rows.get(4).containsKey("tk"));
+    }
+
+    @Test
+    void aThrowingTokenHasherStillShipsFinishAndBlockedRows() {
+      Host h = new Host(null, Hosts.HELLO, true, new Options().tokenHash(true));
+      assertNotNull(h.engine.tokenHasher);
+      h.engine.tokenHasher =
+          value -> {
+            throw new IllegalStateException("test hasher failure");
+          };
+      assertEquals(200, h.call(authenticated(new Call("GET", "/"))).status());
+      Reply blocked = h.call(authenticated(new Call("GET", "/")).peer(BLOCKED_IP));
+      assertEquals(403, blocked.status());
+      assertEquals("ip4", blocked.header("x-block-reason"));
+      List<Map<String, Object>> rows = h.events();
+      assertEquals(2, rows.size());
+      assertEquals(200L, num(rows.get(0), "st"));
+      assertEquals(403L, num(rows.get(1), "st"));
+      assertEquals("ip4", rows.get(1).get("blk"));
+      for (Map<String, Object> row : rows) {
+        assertFalse(row.containsKey("tk"));
+      }
+    }
+
+    @Test
+    void warnsOnceForInvalidOrForbiddenExtraHeaderNamesWithoutLoggingThem() {
+      List<String> warnings = new ArrayList<>();
+      Handler handler =
+          new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+              if (record.getLevel() == Level.WARNING
+                  && record.getMessage().contains("token header")) {
+                warnings.add(record.getMessage());
+              }
+            }
+
+            @Override
+            public void flush() {}
+
+            @Override
+            public void close() {}
+          };
+      Logger log = Logger.getLogger("camada");
+      log.addHandler(handler);
+      try {
+        Map<String, String> env = Map.of("CAMADA_TOKEN_HEADER", "X-Env-Key");
+        new Host(env, Hosts.HELLO, true, new Options().tokenHeader("Invalid_Name"));
+        new Host(env, Hosts.HELLO, true, new Options().tokenHeader("Cookie"));
+      } finally {
+        log.removeHandler(handler);
+      }
+      assertEquals(List.of("[camada] Ignoring invalid or forbidden token header name"), warnings);
     }
   }
 
@@ -448,10 +558,10 @@ class EngineTest {
     @Test
     void stripsSdkAttestedKeysAVisitorPutsInTheBeaconBody() {
       hops1(analyst);
-      Host h = new Host();
+      Host h = new Host(Map.of("CAMADA_TOKEN_HASH", "1"));
       String[] keys = {
         "tlsx", "ja4", "asn", "cc", "sid", "ns", "st", "dur", "rt", "blk", "rl", "wrn", "chs", "ch",
-        "et", "uid"
+        "et", "uid", "tk", "bf", "upf"
       };
       Map<String, Object> body = new LinkedHashMap<>(Map.of("rid", "r-1", "tz", "UTC"));
       for (String k : keys) {
@@ -459,7 +569,7 @@ class EngineTest {
       }
       Reply fp =
           h.call(
-              new Call("POST", "/_cam/fp")
+              authenticated(new Call("POST", "/_cam/fp"))
                   .header("x-forwarded-for", "198.18.0.5")
                   .header("content-type", "application/json")
                   .body(Json.stringify(body)));

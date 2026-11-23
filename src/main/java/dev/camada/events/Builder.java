@@ -5,9 +5,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Pattern;
+import java.util.function.Function;
 
 /**
  * Wire-event builder: reproduces the collector's record() (edge-analyst
@@ -55,10 +54,6 @@ public final class Builder {
     }
   }
 
-  // A schemeless header (`Authorization: <raw token>`) has no safe prefix: the first "word" IS
-  // the credential. Only a real auth-scheme token followed by a space ever ships.
-  private static final Pattern SCHEME_RE = Pattern.compile("^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,16}$");
-
   /**
    * A normalized request: {@code query} includes the leading '?' (or is empty), {@code headers} are
    * in the order the host gives them, {@code ip} is already resolved via the trusted-proxy config,
@@ -73,6 +68,9 @@ public final class Builder {
       String ip,
       String httpVersion) {}
 
+  /** The normalized extra header name, if configured, and the credential hasher. */
+  public record Token(String header, Function<String, String> hash) {}
+
   public static String authScheme(String value) {
     if (value == null || value.isEmpty()) {
       return null;
@@ -82,7 +80,7 @@ public final class Builder {
       return null;
     }
     String scheme = value.substring(0, sp);
-    return SCHEME_RE.matcher(scheme).matches() ? scheme : null;
+    return Redact.isAuthScheme(scheme) ? scheme : null;
   }
 
   public static long nowMs() {
@@ -92,6 +90,17 @@ public final class Builder {
   /** The mutable wire event; the caller fills st/dur on response-finish before enqueueing. */
   public static Map<String, Object> build(
       RequestInfo r, String tap, String rid, String sid, boolean newSession, String ja4) {
+    return build(r, tap, rid, sid, newSession, ja4, null);
+  }
+
+  public static Map<String, Object> build(
+      RequestInfo r,
+      String tap,
+      String rid,
+      String sid,
+      boolean newSession,
+      String ja4,
+      Token token) {
     long mask = 0;
     int hn = 0;
     int hb = 0;
@@ -102,7 +111,7 @@ public final class Builder {
       for (Map.Entry<String, String> h : r.headers()) {
         String name = h.getKey();
         String value = h.getValue() == null ? "" : h.getValue();
-        String k = name.toLowerCase(Locale.ROOT);
+        String k = Redact.asciiLower(name);
         hn++;
         hb += name.length() + value.length();
         names.add(k);
@@ -161,6 +170,19 @@ public final class Builder {
     }
     ev.put("st", null);
     ev.put("dur", null); // 'dur': the collector wire already claims 'lat' for latitude
+    try {
+      if (token != null) {
+        String credential = Redact.selectCredential(first, token.header());
+        if (credential != null) {
+          String hash = token.hash().apply(credential);
+          if (hash != null && !hash.isEmpty()) {
+            ev.put("tk", hash);
+          }
+        }
+      }
+    } catch (Throwable ignored) {
+      // An optional hash must never discard the request row or change the block decision.
+    }
     return ev;
   }
 

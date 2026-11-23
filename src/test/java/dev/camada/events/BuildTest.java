@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.camada.Redact;
 import dev.camada.events.Builder.RequestInfo;
+import dev.camada.events.Builder.Token;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -65,6 +67,51 @@ class BuildTest {
     assertNull(Builder.authScheme(" Bearer x"));
     assertNull(Builder.authScheme("a".repeat(17) + " x"));
     assertNull(Builder.authScheme(null));
+  }
+
+  @Test
+  void tokenHashUsesTheFirstValueOfEachHeaderName() {
+    RequestInfo req =
+        req(
+            headers(
+                "X-\u212Aey", "fake-lookalike-key",
+                "X-Key", "short",
+                "x-key", "fake-ignored-key",
+                "Authorization", "Bearer fake-first-token",
+                "authorization", "Bearer fake-ignored-token"),
+            "",
+            null);
+    Map<String, Object> ev =
+        Builder.build(
+            req,
+            "sdk-java",
+            "r1",
+            null,
+            false,
+            null,
+            new Token("x-key", value -> Redact.hashToken(value, "test-key")));
+    assertEquals(Redact.hashToken("fake-first-token", "test-key"), ev.get("tk"));
+  }
+
+  @Test
+  void aThrowingTokenHasherLeavesTheRestOfTheRowIntact() {
+    RequestInfo req = req(headers("Authorization", "Bearer fake-test-token"), "", null);
+    Map<String, Object> ev =
+        Builder.build(
+            req,
+            "sdk-java",
+            "r1",
+            null,
+            false,
+            null,
+            new Token(
+                null,
+                value -> {
+                  throw new AssertionError("test hasher failure");
+                }));
+    assertEquals("r1", ev.get("rid"));
+    assertEquals("Bearer", ev.get("auth"));
+    assertFalse(ev.containsKey("tk"));
   }
 
   @Test

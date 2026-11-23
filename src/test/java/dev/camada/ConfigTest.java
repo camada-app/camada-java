@@ -2,10 +2,12 @@ package dev.camada;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.camada.Config.RemoteConfig;
+import dev.camada.Config.TokenHeader;
 import dev.camada.Config.TrustedProxy;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,37 @@ class ConfigTest {
   void keyRejectsMissingHalves() {
     for (String bad : new String[] {null, "", "nodot", ".snap", "tok."}) {
       assertNull(Config.parseKey(bad), String.valueOf(bad));
+    }
+  }
+
+  @Test
+  void tokenHashUsesAnExplicitOptionOrExactlyOneFromTheEnv() {
+    assertTrue(Config.tokenHash(true, "0"));
+    assertFalse(Config.tokenHash(false, "1"));
+    assertTrue(Config.tokenHash(null, "1"));
+    assertFalse(Config.tokenHash(null, null));
+    assertFalse(Config.tokenHash(null, "true"));
+    assertFalse(Config.tokenHash(null, " 1"));
+  }
+
+  @Test
+  void tokenHeaderValidatesTheSelectedNameWithoutFallingBackOnInvalidOptions() {
+    String env = "X-Env-Key";
+    assertEquals(new TokenHeader(null, false), Config.resolveTokenHeader("", null));
+    assertEquals(new TokenHeader("x-env-key", false), Config.resolveTokenHeader(null, env));
+    assertEquals(new TokenHeader("x-env-key", false), Config.resolveTokenHeader("", env));
+    assertEquals(new TokenHeader("x-api-key", false), Config.resolveTokenHeader("X-Api-Key", env));
+    assertEquals(new TokenHeader(null, true), Config.resolveTokenHeader(null, "bad_name"));
+    for (String invalid :
+        List.of(
+            "bad_name",
+            "X-Key\n",
+            "X-\u212Aey",
+            "x".repeat(65),
+            "Authorization",
+            "Cookie",
+            "Set-Cookie")) {
+      assertEquals(new TokenHeader(null, true), Config.resolveTokenHeader(invalid, env), invalid);
     }
   }
 

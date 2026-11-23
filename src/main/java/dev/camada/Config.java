@@ -3,6 +3,7 @@ package dev.camada;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Configuration shapes shared by the client and the engine. {@link #parseKey} splits CAMADA_KEY,
@@ -11,6 +12,29 @@ import java.util.Map;
  */
 public final class Config {
   private Config() {}
+
+  private static final Pattern TOKEN_HEADER_RE = Pattern.compile("[a-z0-9-]{1,64}");
+
+  static boolean tokenHash(Boolean option, String env) {
+    return option != null ? option : "1".equals(env);
+  }
+
+  record TokenHeader(String name, boolean invalid) {}
+
+  static TokenHeader resolveTokenHeader(String option, String env) {
+    String name = option != null && !option.isEmpty() ? option : env;
+    if (name == null || name.isEmpty()) {
+      return new TokenHeader(null, false);
+    }
+    String lower = Redact.asciiLower(name);
+    if (!TOKEN_HEADER_RE.matcher(lower).matches()
+        || lower.equals("authorization")
+        || lower.equals("cookie")
+        || lower.equals("set-cookie")) {
+      return new TokenHeader(null, true);
+    }
+    return new TokenHeader(lower, false);
+  }
 
   /**
    * Mirrors the server-validated tenant config (edge-analyst src/tenant-config.js): {mode: none} |
