@@ -19,19 +19,21 @@ public final class Config {
     return option != null ? option : "1".equals(env);
   }
 
-  static String tokenHeader(String option, String env) {
+  record TokenHeader(String name, boolean invalid) {}
+
+  static TokenHeader resolveTokenHeader(String option, String env) {
     String name = option != null && !option.isEmpty() ? option : env;
     if (name == null || name.isEmpty()) {
-      return null;
+      return new TokenHeader(null, false);
     }
     String lower = Redact.asciiLower(name);
     if (!TOKEN_HEADER_RE.matcher(lower).matches()
         || lower.equals("authorization")
         || lower.equals("cookie")
         || lower.equals("set-cookie")) {
-      return null;
+      return new TokenHeader(null, true);
     }
-    return lower;
+    return new TokenHeader(lower, false);
   }
 
   /**

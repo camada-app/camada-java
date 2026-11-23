@@ -24,7 +24,8 @@ public final class Redact {
   private static final Pattern NAME_RE =
       Pattern.compile(
           "(pass(word)?|tok(en)?|secret|key|api[-_]?key|auth|sess(ion)?|sig(nature)?|code|jwt|bearer|credential)");
-  private static final Pattern SCHEME_RE = Pattern.compile("[A-Za-z0-9!#$%&'*+.^_`|~-]{1,16}");
+  // A schemeless Authorization header has no safe prefix. Only a scheme followed by a space ships.
+  private static final Pattern SCHEME_RE = Pattern.compile("^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,16}$");
   private static final Pattern JWT_RE = Pattern.compile("eyJ[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9_-]{6,}");
   private static final Pattern HEX_RE = Pattern.compile("[a-fA-F0-9]{32,}");
   private static final Pattern B64_RE = Pattern.compile("[A-Za-z0-9+/_-]{40,}={0,2}");
@@ -218,18 +219,9 @@ public final class Redact {
     return hmacSha256Hex(ingestToken, "uid:" + userId).substring(0, 32);
   }
 
-  /** The scheme from an untrimmed Authorization value, if it has a scheme followed by a space. */
-  public static String authScheme(String value) {
-    if (value == null) {
-      return null;
-    }
-    int sp = schemeEnd(value, 0, value.length());
-    return sp < 0 ? null : value.substring(0, sp);
-  }
-
-  private static int schemeEnd(String value, int start, int end) {
-    int sp = value.indexOf(' ', start);
-    return sp > start && sp < end && SCHEME_RE.matcher(value).region(start, sp).matches() ? sp : -1;
+  /** Checks the grammar of an Authorization scheme. */
+  public static boolean isAuthScheme(String value) {
+    return SCHEME_RE.matcher(value).matches();
   }
 
   /** Extracts the printable ASCII credential, trimming only space and horizontal tab. */
@@ -237,32 +229,30 @@ public final class Redact {
     if (value == null) {
       return null;
     }
-    int end = value.length();
-    while (end > 0 && isSpaceOrTab(value.charAt(end - 1))) {
-      end--;
+    String v = trimSpaceOrTab(value);
+    int sp = schemeSplit ? v.indexOf(' ') : -1;
+    if (sp > 0 && isAuthScheme(v.substring(0, sp))) {
+      v = trimSpaceOrTab(v.substring(sp + 1));
     }
-    int start = skipSpaceOrTab(value, 0, end);
-    int sp = schemeSplit ? schemeEnd(value, start, end) : -1;
-    if (sp >= 0) {
-      start = skipSpaceOrTab(value, sp + 1, end);
-    }
-    if (end - start < 8) {
-      return null;
-    }
-    for (int i = start; i < end; i++) {
-      char c = value.charAt(i);
-      if (c < 0x20 || c > 0x7E) {
-        return null;
-      }
-    }
-    return value.substring(start, end);
+    return v.length() >= 8 && v.chars().allMatch(c -> c >= 0x20 && c <= 0x7E) ? v : null;
   }
 
-  private static int skipSpaceOrTab(String value, int start, int end) {
+  /** Tries the configured extra header before Authorization, using the first value of each. */
+  public static String selectCredential(Map<String, String> firstHeaders, String tokenHeader) {
+    String extra = tokenHeader == null ? null : credential(firstHeaders.get(tokenHeader), false);
+    return extra != null ? extra : credential(firstHeaders.get("authorization"), true);
+  }
+
+  private static String trimSpaceOrTab(String value) {
+    int start = 0;
+    int end = value.length();
     while (start < end && isSpaceOrTab(value.charAt(start))) {
       start++;
     }
-    return start;
+    while (end > start && isSpaceOrTab(value.charAt(end - 1))) {
+      end--;
+    }
+    return value.substring(start, end);
   }
 
   private static boolean isSpaceOrTab(char c) {

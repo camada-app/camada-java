@@ -1,6 +1,7 @@
 package dev.camada;
 
 import dev.camada.Config.RemoteConfig;
+import dev.camada.Config.TokenHeader;
 import dev.camada.Config.TrustedProxy;
 import dev.camada.challenge.Format;
 import dev.camada.challenge.Kit;
@@ -65,7 +66,7 @@ public class Camada {
   private final Client snap;
   private final Queue queue;
   private final Kit kit;
-  private final String tokenHeader;
+  private final Token token;
   Function<String, String> tokenHasher;
 
   public Camada() {
@@ -80,23 +81,23 @@ public class Camada {
     challengeOn = o.challenge() && !"0".equals(source.get("CAMADA_CHALLENGE"));
     env = Env.resolve(source);
     if (env == null || "1".equals(source.get(Constants.KILL_SWITCH_ENV))) {
-      tokenHeader = null;
+      token = null;
       snap = null; // unconfigured or killed at boot: no threads, no exit hooks, truly silent
       queue = null;
       kit = null;
       return;
     }
-    String optionHeader = o.tokenHeader();
-    String envHeader = source.get("CAMADA_TOKEN_HEADER");
-    tokenHeader = Config.tokenHeader(optionHeader, envHeader);
-    if (tokenHeader == null
-        && ((optionHeader != null && !optionHeader.isEmpty())
-            || (envHeader != null && !envHeader.isEmpty()))) {
+    TokenHeader tokenHeader =
+        Config.resolveTokenHeader(o.tokenHeader(), source.get("CAMADA_TOKEN_HEADER"));
+    if (tokenHeader.invalid()) {
       Guarded.logOnce("token-header", "[camada] Ignoring invalid or forbidden token header name");
     }
     if (Config.tokenHash(o.tokenHash(), source.get("CAMADA_TOKEN_HASH"))) {
       String ingestToken = env.ingestToken();
       tokenHasher = credential -> Redact.hashToken(credential, ingestToken);
+      token = new Token(tokenHeader.name(), credential -> tokenHasher.apply(credential));
+    } else {
+      token = null;
     }
     Client c =
         new Client(env.snapshotUrl(), env.snapToken())
@@ -464,7 +465,6 @@ public class Camada {
             req.headers(),
             ip,
             req.httpVersion());
-    Token token = tokenHasher == null ? null : new Token(tokenHeader, tokenHasher);
     return Builder.build(info, Constants.TAP, rid, sid, newSession, null, token);
   }
 

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.camada.Config.RemoteConfig;
+import dev.camada.Config.TokenHeader;
 import dev.camada.Config.TrustedProxy;
 import java.util.List;
 import java.util.Map;
@@ -40,10 +41,11 @@ class ConfigTest {
   @Test
   void tokenHeaderValidatesTheSelectedNameWithoutFallingBackOnInvalidOptions() {
     String env = "X-Env-Key";
-    assertEquals("x-env-key", Config.tokenHeader(null, env));
-    assertEquals("x-env-key", Config.tokenHeader("", env));
-    assertEquals("x-api-key", Config.tokenHeader("X-Api-Key", env));
-    assertNull(Config.tokenHeader(null, "bad_name"));
+    assertEquals(new TokenHeader(null, false), Config.resolveTokenHeader("", null));
+    assertEquals(new TokenHeader("x-env-key", false), Config.resolveTokenHeader(null, env));
+    assertEquals(new TokenHeader("x-env-key", false), Config.resolveTokenHeader("", env));
+    assertEquals(new TokenHeader("x-api-key", false), Config.resolveTokenHeader("X-Api-Key", env));
+    assertEquals(new TokenHeader(null, true), Config.resolveTokenHeader(null, "bad_name"));
     for (String invalid :
         List.of(
             "bad_name",
@@ -53,7 +55,7 @@ class ConfigTest {
             "Authorization",
             "Cookie",
             "Set-Cookie")) {
-      assertNull(Config.tokenHeader(invalid, env), invalid);
+      assertEquals(new TokenHeader(null, true), Config.resolveTokenHeader(invalid, env), invalid);
     }
   }
 

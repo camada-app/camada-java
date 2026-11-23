@@ -9,6 +9,7 @@ import dev.camada.events.Builder.RequestInfo;
 import dev.camada.events.Builder.Token;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -130,24 +131,22 @@ class SdkConformanceTest {
               return DynamicTest.dynamicTest(
                   (String) c.get("id"),
                   () -> {
-                    Map<String, Object> headers = Json.asMap(c.get("headers"));
-                    String extra = Config.tokenHeader((String) c.get("tokenHeader"), null);
-                    String credential =
-                        extra == null
-                            ? null
-                            : Redact.credential((String) headers.get(extra), false);
-                    if (credential == null) {
-                      credential = Redact.credential((String) headers.get("authorization"), true);
-                    }
-                    assertEquals(c.get("credential"), credential);
+                    Map<String, String> headers = new LinkedHashMap<>();
+                    Json.asMap(c.get("headers"))
+                        .forEach((name, value) -> headers.put(name, (String) value));
+                    String extra =
+                        Config.resolveTokenHeader((String) c.get("tokenHeader"), null).name();
+                    assertEquals(c.get("credential"), Redact.selectCredential(headers, extra));
 
-                    List<Map.Entry<String, String>> entries =
-                        headers.entrySet().stream()
-                            .map(h -> Map.entry(h.getKey(), (String) h.getValue()))
-                            .toList();
                     RequestInfo req =
                         new RequestInfo(
-                            "GET", "shop.test", "/api/me", "", entries, "1.2.3.4", "1.1");
+                            "GET",
+                            "shop.test",
+                            "/api/me",
+                            "",
+                            new ArrayList<>(headers.entrySet()),
+                            "1.2.3.4",
+                            "1.1");
                     String key = (String) c.get("key");
                     Map<String, Object> ev =
                         Builder.build(

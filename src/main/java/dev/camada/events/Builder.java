@@ -72,7 +72,15 @@ public final class Builder {
   public record Token(String header, Function<String, String> hash) {}
 
   public static String authScheme(String value) {
-    return Redact.authScheme(value);
+    if (value == null || value.isEmpty()) {
+      return null;
+    }
+    int sp = value.indexOf(' ');
+    if (sp <= 0) {
+      return null;
+    }
+    String scheme = value.substring(0, sp);
+    return Redact.isAuthScheme(scheme) ? scheme : null;
   }
 
   public static long nowMs() {
@@ -163,12 +171,8 @@ public final class Builder {
     ev.put("st", null);
     ev.put("dur", null); // 'dur': the collector wire already claims 'lat' for latitude
     try {
-      if (token != null && token.hash() != null) {
-        String credential =
-            token.header() == null ? null : Redact.credential(first.get(token.header()), false);
-        if (credential == null) {
-          credential = Redact.credential(first.get("authorization"), true);
-        }
+      if (token != null) {
+        String credential = Redact.selectCredential(first, token.header());
         if (credential != null) {
           String hash = token.hash().apply(credential);
           if (hash != null && !hash.isEmpty()) {
