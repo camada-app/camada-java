@@ -243,6 +243,12 @@ The tag is `<script src="/_cam/b.js?r=<rid>" async>`, so the beacon joins the pa
 served it. Move both paths with `scriptPath` / `fpPath` when `/_cam/` is not yours; the script
 derives the post path from its own URL, so the two must share a directory.
 
+The SDK vendors a tagged `@camada/browser` release, never a build of camada-browser main. CI reads
+the version from `version` in `src/main/resources/dev/camada/beacon.properties`, checks out
+`camada-browser` at `v<version>`, builds it and compares it byte for byte with the vendored copy,
+so beacon changes on main cannot turn this CI red. To take a new beacon, re-sync from its release
+tag (see the testing notes below) and commit; the version bump moves CI to the new tag.
+
 ## App-context events
 
 ```java
@@ -317,7 +323,8 @@ mvn -q verify
 `spotless:check` (google-java-format), `-Xlint:all -Werror`, then surefire. The suite reads the
 golden snapshot fixtures from the `camada-core` sibling checkout (`CAMADA_FIXTURES_DIR` overrides)
 and pins the vendored beacon to `camada-browser/dist/auto.global.js` (`CAMADA_BROWSER_DIST`
-overrides; `npm run build` there first, then `scripts/sync-beacon.sh` after a beacon release).
+overrides; check out the beacon release tag there, run `npm run build`, then run
+`scripts/sync-beacon.sh`).
 Both fail by name when the checkout is missing rather than skipping. `mvn` may run on a newer JDK;
 `<release>17</release>` keeps the build honest.
 
