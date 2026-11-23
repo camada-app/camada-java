@@ -16,8 +16,9 @@ jobs:
           path: camada-core
       - id: beacon
         run: |
-          v=$(sed -n 's/^version=//p' camada-java/src/main/resources/dev/camada/beacon.properties)
-          [ -n "$v" ] || { echo "::error::no vendored beacon version in camada-java/src/main/resources/dev/camada/beacon.properties"; exit 1; }
+          f=camada-java/src/main/resources/dev/camada/beacon.properties
+          v=$(sed -n 's/^version=//p' "$f")
+          [ -n "$v" ] || { echo "::error::no vendored beacon version in $f"; exit 1; }
           echo "ref=v$v" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
