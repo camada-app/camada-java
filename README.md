@@ -345,9 +345,12 @@ mvn -q verify
 golden snapshot fixtures from the `camada-core` sibling checkout (`CAMADA_FIXTURES_DIR` overrides)
 and pins the vendored beacon to `camada-browser/dist/auto.global.js` (`CAMADA_BROWSER_DIST`
 overrides; check out the beacon release tag there, run `npm run build`, then run
-`scripts/sync-beacon.sh`).
-Both fail by name when the checkout is missing rather than skipping. `mvn` may run on a newer JDK;
-`<release>17</release>` keeps the build honest.
+`scripts/sync-beacon.sh`). Both fail by name when the checkout is missing rather than skipping.
+`mvn` may run on a newer JDK; `<release>17</release>` keeps the build honest. CI checks out
+`camada-core` at the commit pinned by `ref:` in `.github/workflows/ci.yml`, so a fixture change on
+camada-core main cannot turn this CI red; local runs use the sibling checkout as it is. To take
+new fixtures, push them to camada-core main first, then set `ref:` to that commit's full SHA in
+the same commit as the SDK change.
 
 [`camada-java-example`](https://github.com/camada-app/camada-java-example) is the hand-test bench (Spring Boot on :3006), and
 `node scripts/e2e-sdk-java.mjs` in `camada/edge-analyst` drives it against a seeded local analyst
