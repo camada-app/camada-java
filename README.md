@@ -349,6 +349,12 @@ overrides; check out the beacon release tag there, run `npm run build`, then run
 Both fail by name when the checkout is missing rather than skipping. `mvn` may run on a newer JDK;
 `<release>17</release>` keeps the build honest.
 
+CI checks out the `camada-core` commit pinned by `ref:` in `.github/workflows/ci.yml`, so fixture
+changes on `camada-core` main won't affect CI. Local runs still pick up changes in the sibling
+checkout, which usually follows `main`. When this SDK needs new or changed fixtures, push the
+`camada-core` commit with those fixtures to `main` first, then set `ref:` to its full SHA in
+the same commit as the SDK changes.
+
 [`camada-java-example`](https://github.com/camada-app/camada-java-example) is the hand-test bench (Spring Boot on :3006), and
 `node scripts/e2e-sdk-java.mjs` in `camada/edge-analyst` drives it against a seeded local analyst
 over real HTTP, cold first request included.
