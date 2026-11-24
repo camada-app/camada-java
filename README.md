@@ -34,7 +34,7 @@ dependency is the servlet API your container already provides.
 <dependency>
   <groupId>dev.camada</groupId>
   <artifactId>camada</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 

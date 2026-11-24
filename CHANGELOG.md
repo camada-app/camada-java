@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-11-24
 
 - Add opt-in credential hashing on request rows with `tokenHash` or `CAMADA_TOKEN_HASH=1`. The `tk` field carries a keyed hash. The beacon relay strips visitor-supplied `tk`, `bf` and `upf`. (camada-all-29aa)
+- chore: beacon re-synced to `@camada/browser` 0.5.0.
 
 ## 0.2.0 - 2026-10-26
 
